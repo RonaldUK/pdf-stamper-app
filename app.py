@@ -29,55 +29,47 @@ def obtener_libreria_sellos():
     return libreria
 
 
-# --- GENERADOR DINÁMICO DE SELLOS CC Y CI (RECUADROS CON FECHA) ---
 def generar_sello_dinamico(tipo_sello, texto_fecha):
-    """Genera el sello dinámico en alta resolución (1200x520) para planos A3 sin depender de fuentes del SO."""
-    # Lienzo de alta resolución para que al incrustarse en A3 no se reduzca
-    ancho, alto = 1200, 520
+    """Genera en memoria un sello con recuadro exacto y texto grande usando la fuente local."""
+    # Mantenemos un lienzo de alta definición proporcional (500x240)
+    ancho, alto = 500, 240
     img = Image.new("RGBA", (ancho, alto), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
 
     # Configuración de colores
     if "CC" in tipo_sello:
-        color = (215, 15, 15, 255)   # Rojo intenso
+        color = (210, 15, 15, 255)   # Rojo intenso
         linea_2 = "COPIA CONTROLADA"
     else:
         color = (0, 75, 190, 255)    # Azul
         linea_2 = "COPIA INFORMATIVA"
 
-    # 1. Dibujar Borde / Recuadro de gran grosor
-    grosor_linea = 18
-    draw.rounded_rectangle([25, 25, ancho - 25, alto - 25], radius=40, outline=color, width=grosor_linea)
+    # 1. Dibujar Borde / Recuadro
+    grosor_linea = 8
+    draw.rounded_rectangle([10, 10, ancho - 10, alto - 10], radius=18, outline=color, width=grosor_linea)
 
-    # 2. Carga de fuentes con respaldo de escala
-    font_large = None
-    font_xlarge = None
-    font_medium = None
-
-    # Intentar cargar fuentes estándar de sistema de forma segura
-    rutas_fuentes = ["arialbd.ttf", "arial.ttf", "DejaVuSans-Bold.ttf", "FreeSansBold.ttf"]
-    for f_path in rutas_fuentes:
-        try:
-            font_large = ImageFont.truetype(f_path, 80)
-            font_xlarge = ImageFont.truetype(f_path, 105)
-            font_medium = ImageFont.truetype(f_path, 75)
-            break
-        except:
-            continue
-
-    # Si el servidor no tiene ninguna fuente externa, usamos el renderizador básico con escala
-    if font_large is None:
-        # Fallback dibuja textos sin tildes de forma limpia
-        draw.text((ancho / 2, 100), "OSP INGENIERIA", fill=color, anchor="mm")
-        draw.text((ancho / 2, 260), linea_2, fill=color, anchor="mm")
-        draw.text((ancho / 2, 410), f"FECHA: {texto_fecha}", fill=color, anchor="mm")
+    # 2. Cargar la fuente local del proyecto (Garantiza tamaño y soporte de tildes)
+    ruta_fuente = "font_bold.ttf"
+    
+    if os.path.exists(ruta_fuente):
+        f_titulo = ImageFont.truetype(ruta_fuente, 32)    # OSP INGENIERÍA
+        f_principal = ImageFont.truetype(ruta_fuente, 42) # COPIA CONTROLADA (GIGANTE)
+        f_fecha = ImageFont.truetype(ruta_fuente, 32)     # FECHA: DD/MM/AAAA
     else:
-        # Dibujado de alta definición
-        draw.text((ancho / 2, 110), "OSP INGENIERIA", fill=color, font=font_large, anchor="mm")
-        draw.text((ancho / 2, 260), linea_2, fill=color, font=font_xlarge, anchor="mm")
-        draw.text((ancho / 2, 410), f"FECHA: {texto_fecha}", fill=color, font=font_medium, anchor="mm")
+        # Si por alguna razón no la encuentra en la carpeta, intenta buscar arialbd del sistema
+        try:
+            f_titulo = ImageFont.truetype("arialbd.ttf", 32)
+            f_principal = ImageFont.truetype("arialbd.ttf", 42)
+            f_fecha = ImageFont.truetype("arialbd.ttf", 32)
+        except:
+            f_titulo = f_principal = f_fecha = ImageFont.load_default()
 
-    # Guardar archivo temporal
+    # 3. Dibujar textos centrados con proporciones perfectas
+    draw.text((ancho / 2, 50), "OSP INGENIERÍA", fill=color, font=f_titulo, anchor="mm")
+    draw.text((ancho / 2, 120), linea_2, fill=color, font=f_principal, anchor="mm")
+    draw.text((ancho / 2, 185), f"FECHA:  {texto_fecha}", fill=color, font=f_fecha, anchor="mm")
+
+    # Guardar en archivo temporal
     temp_sello = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     img.save(temp_sello.name, "PNG")
     temp_sello.close()
@@ -126,9 +118,9 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
                 archivos_temporales.append(ruta_final_sello)
             else:
                 ruta_final_sello = libreria_archivos[item_sello]
-
-            ancho_sello_px = 450
-            alto_sello_px = 195
+                
+            ancho_sello_px = 250
+            alto_sello_px = 120
 
             # 1. Buscar espacio libre
             x_px, y_px = buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px)
