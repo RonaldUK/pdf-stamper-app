@@ -31,36 +31,41 @@ def obtener_libreria_sellos():
 
 # --- GENERADOR DINÁMICO DE SELLOS CC Y CI (RECUADROS CON FECHA) ---
 def generar_sello_dinamico(tipo_sello, texto_fecha):
-    """Genera en memoria un sello vectorial estilo marco con texto y fecha."""
-    ancho, alto = 500, 220
-    # Crear imagen transparente/blanca
-    img = Image.new("RGBA", (ancho, alto), (255, 255, 255, 0))
+    """Genera en memoria un sello con la tipografía, tamaño y proporciones exactas al modelo."""
+    ancho, alto = 600, 260
+    # Fondo blanco sólido para evitar transparencias extrañas en el texto
+    img = Image.new("RGBA", (ancho, alto), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    # Configurar color y texto según el tipo seleccionado
+    # Configuración de colores
     if "CC" in tipo_sello:
-        color = (220, 20, 20, 255)  # Rojo
+        color = (210, 15, 15, 255)   # Rojo intenso
         linea_2 = "COPIA CONTROLADA"
     else:
-        color = (0, 70, 190, 255)   # Azul
+        color = (0, 70, 190, 255)    # Azul
         linea_2 = "COPIA INFORMATIVA"
 
-    # Dibujar Borde / Recuadro
-    grosor_linea = 6
-    draw.rounded_rectangle([10, 10, ancho - 10, alto - 10], radius=15, outline=color, width=grosor_linea)
+    # 1. Dibujar Recuadro con bordes redondeados
+    grosor_linea = 7
+    draw.rounded_rectangle([12, 12, ancho - 12, alto - 12], radius=18, outline=color, width=grosor_linea)
 
-    # Fuentes
+    # 2. Cargar fuentes con tamaños proporcionales grandes
     try:
-        f_titulo = ImageFont.truetype("arial.ttf", 26)
-        f_principal = ImageFont.truetype("arialbd.ttf", 34)
-        f_fecha = ImageFont.truetype("arial.ttf", 28)
+        # En Windows Arial Bold soporta tildes perfectamente
+        f_titulo = ImageFont.truetype("arialbd.ttf", 36)    # OSP INGENIERÍA
+        f_principal = ImageFont.truetype("arialbd.ttf", 46) # COPIA CONTROLADA (Muy visible)
+        f_fecha = ImageFont.truetype("arial.ttf", 38)       # FECHA: DD/MM/AAAA
     except:
+        # Fallback si no encuentra Arial
         f_titulo = f_principal = f_fecha = ImageFont.load_default()
 
-    # Dibujar Textos Centrados
-    draw.text((ancho / 2, 40), "OSP INGENIERÍA", fill=color, font=f_titulo, anchor="mm")
-    draw.text((ancho / 2, 95), linea_2, fill=color, font=f_principal, anchor="mm")
-    draw.text((ancho / 2, 155), f"FECHA: {texto_fecha}", fill=color, font=f_fecha, anchor="mm")
+    # 3. Dibujar textos con las distancias exactas del diseño original
+    # Usamos "INGENIERIA" sin tilde o codificado seguro para evitar caracteres extraños en servidores Linux (Streamlit Cloud)
+    texto_titulo = "OSP INGENIERÍA"
+    
+    draw.text((ancho / 2, 55), texto_titulo, fill=color, font=f_titulo, anchor="mm")
+    draw.text((ancho / 2, 128), linea_2, fill=color, font=f_principal, anchor="mm")
+    draw.text((ancho / 2, 198), f"FECHA:  {texto_fecha}", fill=color, font=f_fecha, anchor="mm")
 
     # Guardar en archivo temporal
     temp_sello = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
@@ -68,7 +73,6 @@ def generar_sello_dinamico(tipo_sello, texto_fecha):
     temp_sello.close()
     
     return temp_sello.name
-
 
 # --- BÚSQUEDA VERTICAL (Abajo ➔ Arriba ➔ Izquierda) ---
 def buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px):
