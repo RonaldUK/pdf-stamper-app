@@ -95,7 +95,7 @@ def buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px):
 
 # --- MOTOR DE PROCESAMIENTO ---
 def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
-    """Dibuja el marco y texto directo en el PDF (Vectorial y Nítido)."""
+    """Dibuja el marco y texto directo en el PDF (Vectorial, Nítido y compatible)."""
     # Color según el sello
     if "CC" in tipo_sello:
         color = (0.85, 0.05, 0.05)  # Rojo
@@ -104,19 +104,24 @@ def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
         color = (0.0, 0.3, 0.75)   # Azul
         linea_2 = "COPIA INFORMATIVA"
 
-    # 1. Dibujar Recuadro Vectorial con bordes redondeados
+    # 1. Dibujar Recuadro Vectorial
     shape = pagina.new_shape()
     shape.draw_rect(rect)
     shape.finish(color=color, fill=None, width=2.5)
     shape.commit()
 
-    # 2. Insertar Texto Nativo centrado
-    ancho_rect = rect.width
-    x_centro = rect.x0 + (ancho_rect / 2)
+    # 2. Definir sub-cajas para cada línea de texto dentro del marco
+    x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
+    alto_caja = y1 - y0
 
-    # OSP INGENIERIA
-    pagina.insert_text(
-        fitz.Point(x_centro, rect.y0 + 25),
+    # Cajas calculadas proporcionalmente
+    rect_linea1 = fitz.Rect(x0, y0 + alto_caja * 0.10, x1, y0 + alto_caja * 0.35)
+    rect_linea2 = fitz.Rect(x0, y0 + alto_caja * 0.35, x1, y0 + alto_caja * 0.68)
+    rect_linea3 = fitz.Rect(x0, y0 + alto_caja * 0.68, x1, y1 - alto_caja * 0.08)
+
+    # 3. Insertar Textos Centrados mediante insert_textbox
+    pagina.insert_textbox(
+        rect_linea1,
         "OSP INGENIERIA",
         fontsize=11,
         fontname="helv",
@@ -124,21 +129,19 @@ def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
         align=fitz.TEXT_ALIGN_CENTER
     )
 
-    # COPIA CONTROLADA / INFORMATIVA (Negrita y Gigante)
-    pagina.insert_text(
-        fitz.Point(x_centro, rect.y0 + 52),
+    pagina.insert_textbox(
+        rect_linea2,
         linea_2,
-        fontsize=15,
-        fontname="hebo",  # Helvetica Bold (Nativa de PDF)
+        fontsize=14,
+        fontname="hebo",  # Helvetica Bold
         color=color,
         align=fitz.TEXT_ALIGN_CENTER
     )
 
-    # FECHA
-    pagina.insert_text(
-        fitz.Point(x_centro, rect.y0 + 78),
+    pagina.insert_textbox(
+        rect_linea3,
         f"FECHA: {texto_fecha}",
-        fontsize=12,
+        fontsize=11,
         fontname="hebo",
         color=color,
         align=fitz.TEXT_ALIGN_CENTER
