@@ -1,0 +1,6 @@
+__pycache__/
+*.pdf
+*.png
+!.png
+# Evitamos subir archivos PDF o PNG generados por pruebas, salvo las plantillas de sellos
+resultado_deteccion.png
