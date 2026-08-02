@@ -15,7 +15,7 @@ if not os.path.exists(CARPETA_SELLOS):
     os.makedirs(CARPETA_SELLOS)
 
 def obtener_libreria_sellos():
-    """Lee automáticamente todas las imágenes PNG/JPG de la carpeta."""
+    """Lee automáticamente las imágenes PNG/JPG guardadas en la carpeta."""
     extensiones = ('*.png', '*.jpg', '*.jpeg', '*.PNG', '*.JPG')
     archivos = []
     for ext in extensiones:
@@ -29,36 +29,42 @@ def obtener_libreria_sellos():
     return libreria
 
 
-# --- FUNCIÓN PARA AGREGAR FECHA DINÁMICA A LA IMAGEN ---
-def estampar_fecha_en_imagen(ruta_imagen_original, texto_fecha):
-    """Carga la imagen del sello y le dibuja dinámicamente el texto de la fecha en la parte inferior."""
-    # Abrir imagen con OpenCV/PIL
-    img_pil = Image.open(ruta_imagen_original).convert("RGBA")
-    draw = ImageDraw.Draw(img_pil)
-    
-    ancho, alto = img_pil.size
+# --- GENERADOR DINÁMICO DE SELLOS CC Y CI (RECUADROS CON FECHA) ---
+def generar_sello_dinamico(tipo_sello, texto_fecha):
+    """Genera en memoria un sello vectorial estilo marco con texto y fecha."""
+    ancho, alto = 500, 220
+    # Crear imagen transparente/blanca
+    img = Image.new("RGBA", (ancho, alto), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
 
-    # Intentar cargar una fuente estándar del sistema o usar la por defecto
+    # Configurar color y texto según el tipo seleccionado
+    if "CC" in tipo_sello:
+        color = (220, 20, 20, 255)  # Rojo
+        linea_2 = "COPIA CONTROLADA"
+    else:
+        color = (0, 70, 190, 255)   # Azul
+        linea_2 = "COPIA INFORMATIVA"
+
+    # Dibujar Borde / Recuadro
+    grosor_linea = 6
+    draw.rounded_rectangle([10, 10, ancho - 10, alto - 10], radius=15, outline=color, width=grosor_linea)
+
+    # Fuentes
     try:
-        # Tamaños proporcionales al tamaño del sello
-        fuente = ImageFont.truetype("arial.ttf", int(alto * 0.18))
+        f_titulo = ImageFont.truetype("arial.ttf", 26)
+        f_principal = ImageFont.truetype("arialbd.ttf", 34)
+        f_fecha = ImageFont.truetype("arial.ttf", 28)
     except:
-        fuente = ImageFont.load_default()
+        f_titulo = f_principal = f_fecha = ImageFont.load_default()
 
-    texto_a_imprimir = f"FECHA: {texto_fecha}"
-    
-    # Coordenadas aproximadas para la parte inferior central del sello
-    # Puedes ajustar las coordenadas (X, Y) si deseas mover la fecha
-    pos_x = int(ancho * 0.15)
-    pos_y = int(alto * 0.68)
+    # Dibujar Textos Centrados
+    draw.text((ancho / 2, 40), "OSP INGENIERÍA", fill=color, font=f_titulo, anchor="mm")
+    draw.text((ancho / 2, 95), linea_2, fill=color, font=f_principal, anchor="mm")
+    draw.text((ancho / 2, 155), f"FECHA: {texto_fecha}", fill=color, font=f_fecha, anchor="mm")
 
-    # Dibujar el texto en rojo intenso (igual que el estilo de tu imagen)
-    color_texto = (220, 20, 20, 255) 
-    draw.text((pos_x, pos_y), texto_a_imprimir, fill=color_texto, font=fuente)
-
-    # Guardar temporalmente la imagen modificada con la fecha
+    # Guardar en archivo temporal
     temp_sello = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    img_pil.save(temp_sello.name, "PNG")
+    img.save(temp_sello.name, "PNG")
     temp_sello.close()
     
     return temp_sello.name
@@ -81,14 +87,14 @@ def buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px):
     return ancho_img - ancho_sello_px - 30, alto_img - alto_sello_px - 30
 
 
-# --- PROCESAMIENTO MULTI-SELLO CON FECHA ---
-def procesar_pdf_múltiples_sellos(pdf_bytes, lista_rutas_sellos, texto_fecha):
+# --- MOTOR DE PROCESAMIENTO ---
+def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_pdf.write(pdf_bytes)
         path_pdf = tmp_pdf.name
 
     doc = fitz.open(path_pdf)
-    archivos_temporales_fecha = []
+    archivos_temporales = []
 
     for i in range(len(doc)):
         pagina = doc[i]
@@ -99,105 +105,127 @@ def procesar_pdf_múltiples_sellos(pdf_bytes, lista_rutas_sellos, texto_fecha):
         factor_x = pagina.rect.width / pixmap.w
         factor_y = pagina.rect.height / pixmap.h
 
-        for ruta_sello in lista_rutas_sellos:
-            # Generar sello con la fecha incrustada dinámicamente
-            ruta_sello_con_fecha = estampar_fecha_en_imagen(ruta_sello, texto_fecha)
-            archivos_temporales_fecha.append(ruta_sello_con_fecha)
+        for item_sello in lista_sellos_elegidos:
+            # Determinar si es un sello dinámico (CC / CI) o una imagen física de la carpeta
+            if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
+                ruta_final_sello = generar_sello_dinamico(item_sello, texto_fecha)
+                archivos_temporales.append(ruta_final_sello)
+            else:
+                ruta_final_sello = libreria_archivos[item_sello]
 
             ancho_sello_px = 250
             alto_sello_px = 120
 
+            # 1. Buscar espacio libre
             x_px, y_px = buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px)
 
+            # 2. Insertar sello
             pdf_x = x_px * factor_x
             pdf_y = y_px * factor_y
             pdf_ancho = ancho_sello_px * factor_x
             pdf_alto = alto_sello_px * factor_y
 
             rect_sello = fitz.Rect(pdf_x, pdf_y, pdf_x + pdf_ancho, pdf_y + pdf_alto)
-            pagina.insert_image(rect_sello, filename=ruta_sello_con_fecha)
+            pagina.insert_image(rect_sello, filename=ruta_final_sello)
 
-            # Actualizar memoria para evitar solapamientos
+            # 3. Ocupar zona en memoria
             cv2.rectangle(imagen_gris, (x_px, y_px), (x_px + ancho_sello_px, y_px + alto_sello_px), 0, -1)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
     doc.save(output_pdf_path)
     doc.close()
 
+    # Limpieza
     with open(output_pdf_path, "rb") as f:
         pdf_final_bytes = f.read()
 
-    # Limpieza de archivos temporales
     os.remove(path_pdf)
     os.remove(output_pdf_path)
-    for tmp_f in archivos_temporales_fecha:
+    for tmp_f in archivos_temporales:
         if os.path.exists(tmp_f):
             os.remove(tmp_f)
 
     return pdf_final_bytes
 
 
-# --- INTERFAZ DE USUARIO ---
-st.set_page_config(page_title="Stamper IA - Agente RZ", page_icon="🤖", layout="wide")
+# --- INTERFAZ STREAMLIT ---
+st.set_page_config(page_title="Agente RZ - Estampado", page_icon="🤖", layout="wide")
 
-# Títulos solicitados
+# Encabezado
 st.title("🤖📑 AGENTE PARA ESTAMPAR")
 st.caption("Gestion del sellos y copias elaborado por RZ")
 
+# --- SIDEBAR: ADMINISTRACIÓN DE NUEVAS FOTOS/SELLOS ---
+st.sidebar.header("📁 Cargar Nuevos Sellos")
+with st.sidebar.expander("➕ Subir Firma/Imagen a Base de Datos", expanded=True):
+    nuevo_nombre = st.text_input("Nombre de la firma/sello:")
+    archivo_nuevo = st.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
+    
+    if st.button("💾 Guardar en Base de Datos"):
+        if not nuevo_nombre.strip() or not archivo_nuevo:
+            st.sidebar.error("Ingresa un nombre y selecciona la imagen.")
+        else:
+            ext = archivo_nuevo.name.split(".")[-1]
+            nombre_archivo = f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}"
+            ruta_destino = os.path.join(CARPETA_SELLOS, nombre_archivo)
+            
+            with open(ruta_destino, "wb") as f:
+                f.write(archivo_nuevo.read())
+                
+            st.sidebar.success(f"¡Sello '{nuevo_nombre}' agregado con éxito!")
+            st.rerun()
+
 st.divider()
 
-# --- 1. CARGAR ARCHIVO PDF PRIMERO (ARRIBA) ---
+# --- 1. SUBIR PLANO PDF (ARRIBA DE TODO) ---
 st.subheader("1. 📂 Cargar Plano / Documento PDF")
-archivo_pdf = st.file_uploader("Selecciona tu archivo PDF (A3 o estándar):", type=["pdf"])
+archivo_pdf = st.file_uploader("Selecciona tu archivo PDF (A3 o Estándar):", type=["pdf"])
 
 st.divider()
 
-# --- 2. CONFIGURACIÓN DE FECHA Y SELLOS ---
-st.subheader("2. 🏷️ Configuración de Sellos y Fecha")
+# --- 2. CONFIGURACIÓN Y SELECCIÓN DE SELLOS (COMBOBOX INTEGRADO) ---
+st.subheader("2. 🏷️ Selección de Sellos y Firma")
 
-# Campo de texto para la fecha con valor por defecto la fecha actual (Formato DD/MM/YYYY)
-fecha_actual_str = datetime.now().strftime("%d/%m/%Y")
-texto_fecha_ingresada = st.text_input("📅 Fecha a mostrar en el sello (editable):", value=fecha_actual_str)
+col1, col2 = st.columns([1, 2])
 
-# Cargar librería de sellos
-libreria_actual = obtener_libreria_sellos()
+with col1:
+    fecha_hoy = datetime.now().strftime("%d/%m/%Y")
+    texto_fecha_ingresada = st.text_input("📅 Fecha de Sellado (Editable):", value=fecha_hoy)
 
-if not libreria_actual:
-    st.info("💡 La carpeta `firmas_sellos` está vacía. Usa el panel izquierdo para agregar tus imágenes de sellos.")
-else:
+# Construir opciones del Combobox consolidando CC/CI + Carpeta
+libreria_archivos = obtener_libreria_sellos()
+opciones_dinamicas = ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]
+opciones_totales = opciones_dinamicas + list(libreria_archivos.keys())
+
+with col2:
     sellos_seleccionados = st.multiselect(
-        "Selecciona uno o varios sellos para insertar:",
-        options=list(libreria_actual.keys()),
-        default=list(libreria_actual.keys())[:1]
+        "🏷️ Selecciona uno o varios sellos/firmas a aplicar:",
+        options=opciones_totales,
+        default=[opciones_totales[0]] if opciones_totales else []
     )
 
-    if sellos_seleccionados:
-        st.write("**Previsualización de sellos seleccionados:**")
-        cols = st.columns(min(len(sellos_seleccionados), 5))
-        for idx, nombre_sello in enumerate(sellos_seleccionados):
-            col_idx = idx % 5
-            with cols[col_idx]:
-                st.image(libreria_actual[nombre_sello], caption=f"{idx+1}. {nombre_sello}", use_container_width=True)
-
 st.divider()
 
-# --- 3. ACCIONADOR DE ESTAMPADO ---
-if archivo_pdf and libreria_actual and sellos_seleccionados:
-    rutas_a_procesar = [libreria_actual[nombre] for nombre in sellos_seleccionados]
-    
-    if st.button(f"🚀 Estampar {len(sellos_seleccionados)} Sello(s) con Fecha", use_container_width=True):
-        with st.spinner("Analizando plano, integrando fecha y ubicando espacios..."):
+# --- 3. BOTÓN Y PROCESAMIENTO ---
+if archivo_pdf and sellos_seleccionados:
+    if st.button(f"🚀 Estampar {len(sellos_seleccionados)} Sello(s) Seleccionado(s)", use_container_width=True):
+        with st.spinner("Procesando lámina y aplicando firmas/sellos..."):
             try:
-                pdf_resultado = procesar_pdf_múltiples_sellos(archivo_pdf.read(), rutas_a_procesar, texto_fecha_ingresada)
+                pdf_resultado = procesar_pdf(
+                    archivo_pdf.read(), 
+                    sellos_seleccionados, 
+                    libreria_archivos, 
+                    texto_fecha_ingresada
+                )
                 
-                st.success("¡Planos sellados con fecha y éxito!")
+                st.success("¡Documento estampado exitosamente!")
                 
                 st.download_button(
-                    label="📥 Descargar PDF Sellado con Fecha",
+                    label="📥 Descargar PDF Sellado",
                     data=pdf_resultado,
                     file_name=f"ESTAMPADO_{archivo_pdf.name}",
                     mime="application/pdf",
                     use_container_width=True
                 )
             except Exception as e:
-                st.error(f"Error al procesar el documento: {e}")
+                st.error(f"Error durante el procesamiento: {e}")
