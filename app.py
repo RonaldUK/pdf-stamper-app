@@ -95,7 +95,7 @@ def buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px):
 
 # --- MOTOR DE PROCESAMIENTO ---
 def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
-    """Dibuja el marco y texto directo en el PDF calculando el centro manualmente."""
+    """Dibuja el marco y texto calculando proporciones dinámicas para que NUNCA se desborde."""
     # Color según el sello
     if "CC" in tipo_sello:
         color = (0.85, 0.05, 0.05)  # Rojo
@@ -107,22 +107,31 @@ def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
     # 1. Dibujar Recuadro Vectorial
     shape = pagina.new_shape()
     shape.draw_rect(rect)
-    shape.finish(color=color, fill=None, width=2.5)
+    shape.finish(color=color, fill=None, width=2.0)
     shape.commit()
 
-    # 2. Encontrar el centro exacto de tu caja
-    centro_x = rect.x0 + (rect.width / 2)
-    y_inicial = rect.y0
+    # 2. Obtener dimensiones dinámicas exactas de LA CAJA en este PDF
+    alto_caja = rect.height
+    ancho_caja = rect.width
+    centro_x = rect.x0 + (ancho_caja / 2)
 
-    # 3. Función interna para centrar el texto "a la fuerza" y sin errores
-    def dibujar_texto_centrado(texto, y_offset, fontsize, fontname):
-        # Estimamos el ancho del texto matemáticamente para centrarlo
-        # Un carácter mide aprox el 55% del tamaño de la fuente
-        ancho_estimado = len(texto) * fontsize * 0.55
-        x_calculado = centro_x - (ancho_estimado / 2)
-        y_calculado = y_inicial + y_offset
+    # 3. Función interna para escalar y centrar
+    def dibujar_texto_proporcional(texto, prop_y, prop_size, fontname):
+        # El tamaño de la letra es un porcentaje del alto total de la caja
+        fontsize = alto_caja * prop_size
         
-        # Insertamos usando el método básico que no falla
+        # Medimos cuánto mide el texto de ancho con ese tamaño de fuente
+        ancho_texto = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+        
+        # Sistema de seguridad: si el texto es más ancho que la caja, achicamos la letra
+        if ancho_texto > (ancho_caja * 0.90):
+            fontsize = fontsize * ((ancho_caja * 0.90) / ancho_texto)
+            ancho_texto = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+
+        # Calculamos X (para centrar perfecto) e Y (posición vertical proporcional)
+        x_calculado = centro_x - (ancho_texto / 2)
+        y_calculado = rect.y0 + (alto_caja * prop_y)
+        
         pagina.insert_text(
             fitz.Point(x_calculado, y_calculado),
             texto,
@@ -131,11 +140,11 @@ def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
             color=color
         )
 
-    # 4. Dibujamos las 3 líneas pasándole la distancia (Y) desde arriba
-    # Los valores 35, 70 y 105 son los espacios para acomodarse en tu caja de 120px de alto
-    dibujar_texto_centrado("OSP INGENIERIA", 35, 12, "helv")
-    dibujar_texto_centrado(linea_2, 70, 16, "hebo")  # hebo = Helvetica Bold
-    dibujar_texto_centrado(f"FECHA: {texto_fecha}", 105, 12, "hebo")
+    # 4. Inyectamos los textos (prop_y: % desde arriba, prop_size: % altura de letra)
+    # Ejemplo: 0.30 significa que la base de la letra estará al 30% de la altura de la caja
+    dibujar_texto_proporcional("OSP INGENIERIA", 0.30, 0.18, "helv")
+    dibujar_texto_proporcional(linea_2, 0.62, 0.22, "hebo") # hebo = Negrita y más grande
+    dibujar_texto_proporcional(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
 
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
