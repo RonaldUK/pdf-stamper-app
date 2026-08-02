@@ -95,7 +95,7 @@ def buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px):
 
 # --- MOTOR DE PROCESAMIENTO ---
 def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
-    """Dibuja el marco y texto directo en el PDF (Vectorial, Nítido y compatible)."""
+    """Dibuja el marco y texto directo en el PDF calculando el centro manualmente."""
     # Color según el sello
     if "CC" in tipo_sello:
         color = (0.85, 0.05, 0.05)  # Rojo
@@ -110,42 +110,32 @@ def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
     shape.finish(color=color, fill=None, width=2.5)
     shape.commit()
 
-    # 2. Definir sub-cajas para cada línea de texto dentro del marco
-    x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
-    alto_caja = y1 - y0
+    # 2. Encontrar el centro exacto de tu caja
+    centro_x = rect.x0 + (rect.width / 2)
+    y_inicial = rect.y0
 
-    # Cajas calculadas proporcionalmente
-    rect_linea1 = fitz.Rect(x0, y0 + alto_caja * 0.10, x1, y0 + alto_caja * 0.35)
-    rect_linea2 = fitz.Rect(x0, y0 + alto_caja * 0.35, x1, y0 + alto_caja * 0.68)
-    rect_linea3 = fitz.Rect(x0, y0 + alto_caja * 0.68, x1, y1 - alto_caja * 0.08)
+    # 3. Función interna para centrar el texto "a la fuerza" y sin errores
+    def dibujar_texto_centrado(texto, y_offset, fontsize, fontname):
+        # Estimamos el ancho del texto matemáticamente para centrarlo
+        # Un carácter mide aprox el 55% del tamaño de la fuente
+        ancho_estimado = len(texto) * fontsize * 0.55
+        x_calculado = centro_x - (ancho_estimado / 2)
+        y_calculado = y_inicial + y_offset
+        
+        # Insertamos usando el método básico que no falla
+        pagina.insert_text(
+            fitz.Point(x_calculado, y_calculado),
+            texto,
+            fontsize=fontsize,
+            fontname=fontname,
+            color=color
+        )
 
-    # 3. Insertar Textos Centrados mediante insert_textbox
-    pagina.insert_textbox(
-        rect_linea1,
-        "OSP INGENIERIA",
-        fontsize=11,
-        fontname="helv",
-        color=color,
-        align=fitz.TEXT_ALIGN_CENTER
-    )
-
-    pagina.insert_textbox(
-        rect_linea2,
-        linea_2,
-        fontsize=14,
-        fontname="hebo",  # Helvetica Bold
-        color=color,
-        align=fitz.TEXT_ALIGN_CENTER
-    )
-
-    pagina.insert_textbox(
-        rect_linea3,
-        f"FECHA: {texto_fecha}",
-        fontsize=11,
-        fontname="hebo",
-        color=color,
-        align=fitz.TEXT_ALIGN_CENTER
-    )
+    # 4. Dibujamos las 3 líneas pasándole la distancia (Y) desde arriba
+    # Los valores 35, 70 y 105 son los espacios para acomodarse en tu caja de 120px de alto
+    dibujar_texto_centrado("OSP INGENIERIA", 35, 12, "helv")
+    dibujar_texto_centrado(linea_2, 70, 16, "hebo")  # hebo = Helvetica Bold
+    dibujar_texto_centrado(f"FECHA: {texto_fecha}", 105, 12, "hebo")
 
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
