@@ -94,13 +94,62 @@ def buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px):
 
 
 # --- MOTOR DE PROCESAMIENTO ---
+def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
+    """Dibuja el marco y texto directo en el PDF (Vectorial y Nítido)."""
+    # Color según el sello
+    if "CC" in tipo_sello:
+        color = (0.85, 0.05, 0.05)  # Rojo
+        linea_2 = "COPIA CONTROLADA"
+    else:
+        color = (0.0, 0.3, 0.75)   # Azul
+        linea_2 = "COPIA INFORMATIVA"
+
+    # 1. Dibujar Recuadro Vectorial con bordes redondeados
+    shape = pagina.new_shape()
+    shape.draw_rect(rect)
+    shape.finish(color=color, fill=None, width=2.5)
+    shape.commit()
+
+    # 2. Insertar Texto Nativo centrado
+    ancho_rect = rect.width
+    x_centro = rect.x0 + (ancho_rect / 2)
+
+    # OSP INGENIERIA
+    pagina.insert_text(
+        fitz.Point(x_centro, rect.y0 + 25),
+        "OSP INGENIERIA",
+        fontsize=11,
+        fontname="helv",
+        color=color,
+        align=fitz.TEXT_ALIGN_CENTER
+    )
+
+    # COPIA CONTROLADA / INFORMATIVA (Negrita y Gigante)
+    pagina.insert_text(
+        fitz.Point(x_centro, rect.y0 + 52),
+        linea_2,
+        fontsize=15,
+        fontname="hebo",  # Helvetica Bold (Nativa de PDF)
+        color=color,
+        align=fitz.TEXT_ALIGN_CENTER
+    )
+
+    # FECHA
+    pagina.insert_text(
+        fitz.Point(x_centro, rect.y0 + 78),
+        f"FECHA: {texto_fecha}",
+        fontsize=12,
+        fontname="hebo",
+        color=color,
+        align=fitz.TEXT_ALIGN_CENTER
+    )
+
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_pdf.write(pdf_bytes)
         path_pdf = tmp_pdf.name
 
     doc = fitz.open(path_pdf)
-    archivos_temporales = []
 
     for i in range(len(doc)):
         pagina = doc[i]
@@ -112,44 +161,39 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         factor_y = pagina.rect.height / pixmap.h
 
         for item_sello in lista_sellos_elegidos:
-            # Determinar si es un sello dinámico (CC / CI) o una imagen física de la carpeta
-            if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
-                ruta_final_sello = generar_sello_dinamico(item_sello, texto_fecha)
-                archivos_temporales.append(ruta_final_sello)
-            else:
-                ruta_final_sello = libreria_archivos[item_sello]
-                
             ancho_sello_px = 250
             alto_sello_px = 120
 
-            # 1. Buscar espacio libre
+            # 1. Encontrar espacio libre
             x_px, y_px = buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px)
 
-            # 2. Insertar sello
+            # 2. Calcular coordenadas en el PDF
             pdf_x = x_px * factor_x
             pdf_y = y_px * factor_y
             pdf_ancho = ancho_sello_px * factor_x
             pdf_alto = alto_sello_px * factor_y
 
             rect_sello = fitz.Rect(pdf_x, pdf_y, pdf_x + pdf_ancho, pdf_y + pdf_alto)
-            pagina.insert_image(rect_sello, filename=ruta_final_sello)
 
-            # 3. Ocupar zona en memoria
+            # 3. Aplicar sello (Vectorial o Imagen según selección)
+            if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
+                agregar_sello_vectorial_pdf(pagina, rect_sello, item_sello, texto_fecha)
+            else:
+                ruta_imagen = libreria_archivos[item_sello]
+                pagina.insert_image(rect_sello, filename=ruta_imagen)
+
+            # Ocupar espacio en memoria
             cv2.rectangle(imagen_gris, (x_px, y_px), (x_px + ancho_sello_px, y_px + alto_sello_px), 0, -1)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
     doc.save(output_pdf_path)
     doc.close()
 
-    # Limpieza
     with open(output_pdf_path, "rb") as f:
         pdf_final_bytes = f.read()
 
     os.remove(path_pdf)
     os.remove(output_pdf_path)
-    for tmp_f in archivos_temporales:
-        if os.path.exists(tmp_f):
-            os.remove(tmp_f)
 
     return pdf_final_bytes
 
