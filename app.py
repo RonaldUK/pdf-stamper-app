@@ -28,58 +28,63 @@ def obtener_libreria_sellos():
 
 # --- DETECCIÓN INTELIGENTE DE CÓDIGO Y TÍTULO POR ETIQUETAS ---
 def extraer_datos_inteligentes_cajetin(pagina):
-    words = pagina.get_text("words")
+    """
+    Extrae el código de plano mediante expresiones regulares de ingeniería
+    y el título delimitando la búsqueda a la región del cajetín inferior derecho.
+    """
+    # 1. Obtener dimensiones de la página nativa
+    ancho_pag = pagina.rect.width
+    alto_pag = pagina.rect.height
+
+    # 2. BÚSQUEDA DEL CÓDIGO DE PLANO (Patrones estándar de Ingeniería)
+    texto_completo = pagina.get_text("text")
     
+    # Patrón 1: Ej. ME154-MCA-06-11-001-R1 o ME154-AR-06-11-012-R1 o similar (letras/números separados por guiones con revisión al final)
+    patron_codigo = r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}(?:-R\d+|-REV\d+)?\b'
+    matches = re.findall(patron_codigo, texto_completo)
+
     codigo_plano = "No detectado"
-    titulo_plano = "No detectado"
-    
-    rect_codigo_label = None
-    rect_proyecto_label = None
+    if matches:
+        # Filtrar posibles coincidencias que contengan palabras no deseadas
+        falsos_positivos = ["ESCALA", "FECHA", "PROYECTO", "TUBOS", "INDICADA"]
+        candidatos_validos = [m for m in matches if not any(fp in m for fp in falsos_positivos)]
+        if candidatos_validos:
+            codigo_plano = candidatos_validos[0]  # Tomamos el primer código válido
 
-    # 1. Localizar coordenadas de las etiquetas en el cajetín
-    for w in words:
-        texto_clean = w[4].upper().strip()
-        if "CODIGO" in texto_clean or "CÓDIGO" in texto_clean:
-            rect_codigo_label = fitz.Rect(w[0], w[1], w[2], w[3])
-        elif "PROYECTO" in texto_clean:
-            rect_proyecto_label = fitz.Rect(w[0], w[1], w[2], w[3])
-
-    # 2. Extraer CÓDIGO cerca de la etiqueta "CODIGO:"
-    if rect_codigo_label:
-        search_area_cod = fitz.Rect(
-            rect_codigo_label.x0 - 10,
-            rect_codigo_label.y0,
-            rect_codigo_label.x1 + 300,
-            rect_codigo_label.y1 + 50
-        )
-        texto_area_cod = pagina.get_text("text", clip=search_area_cod).strip()
-        lineas_cod = [l.strip() for l in texto_area_cod.split('\n') if l.strip()]
-        
-        for l in lineas_cod:
-            if "CODIGO" not in l.upper() and "CÓDIGO" not in l.upper():
-                codigo_plano = l
-                break
-
-    # Fallback por Expresión Regular para el Código si falla el área
+    # Si no encontró patrón complejo, buscar patrón simple de código: ej. ME-154-001 o similar
     if codigo_plano == "No detectado":
-        texto_completo = pagina.get_text("text")
-        match = re.search(r'[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}', texto_completo)
-        if match:
-            codigo_plano = match.group(0)
+        patron_secundario = r'\b[A-Z]{2,}\d+-[A-Z0-9\-]+\b'
+        matches_sec = re.findall(patron_secundario, texto_completo)
+        if matches_sec:
+            codigo_plano = matches_sec[0]
 
-    # 3. Extraer TÍTULO / DESCRIPCIÓN debajo de "PROYECTO:"
-    if rect_proyecto_label:
-        search_area_proj = fitz.Rect(
-            rect_proyecto_label.x0 - 20,
-            rect_proyecto_label.y1,
-            rect_proyecto_label.x0 + 400,
-            rect_proyecto_label.y1 + 120
-        )
-        texto_area_proj = pagina.get_text("text", clip=search_area_proj).strip()
-        lineas_proj = [l.strip() for l in texto_area_proj.split('\n') if l.strip()]
+    # 3. BÚSQUEDA DEL TÍTULO / DESCRIPCIÓN (En la Región de Interés del Cajetín: 60%-100% X, 70%-100% Y)
+    roi_cajetin = fitz.Rect(ancho_pag * 0.55, alto_pag * 0.65, ancho_pag, alto_pag)
+    bloques_cajetin = pagina.get_text("blocks", clip=roi_cajetin)
+
+    lineas_titulo = []
+    
+    for block in bloques_cajetin:
+        texto_bloque = block[4].strip()
+        lineas = [l.strip() for l in texto_bloque.split('\n') if l.strip()]
         
-        if lineas_proj:
-            titulo_plano = " - ".join(lineas_proj)
+        for l in lineas:
+            # Descartar etiquetas genéricas e informaciones secundarias del cajetín
+            l_upper = l.upper()
+            palabras_ignorar = [
+                "PROYECTO:", "PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", 
+                "INDICADA", "JUNIO", "JULIO", "AGOSTO", "SETIEMBRE", "OCTUBRE", 
+                "NOVIEMBRE", "DICIEMBRE", "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO",
+                "ESCALA GRAFICA", "MINISTERIO", "MTC", "INTERSUR", "CAD", "REVISION"
+            ]
+            
+            # Si la línea no contiene palabras de ignorar y no es idéntica al código encontrado
+            if not any(pi in l_upper for pi in palabras_ignorar) and l != codigo_plano and len(l) > 3:
+                # Evitar incluir coordenadas o metrados sueltos
+                if not re.match(r'^\d+[\.\,\+]\d+$', l):
+                    lineas_titulo.append(l)
+
+    titulo_plano = " - ".join(lineas_titulo[:3]) if lineas_titulo else "No detectado"
 
     return codigo_plano, titulo_plano
 
