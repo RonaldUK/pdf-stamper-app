@@ -1,5 +1,6 @@
 streamlit
-PyMuPDF
+pymupdf
 opencv-python-headless
 numpy
+openpyxl
 Pillow

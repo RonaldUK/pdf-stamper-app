@@ -7,9 +7,13 @@ import os
 import glob
 import re
 import datetime
+import io
+import openpyxl
 
-# --- CONFIGURACIÓN DE CARPETAS ---
+# --- CONFIGURACIÓN DE CARPETAS Y PLANTILLA ---
 CARPETA_SELLOS = "firmas_sellos"
+PLANTILLA_EXCEL = "PLANTILLA_GR.xlsx"  # Debe estar en la raíz de tu proyecto en GitHub
+
 if not os.path.exists(CARPETA_SELLOS):
     os.makedirs(CARPETA_SELLOS)
 
@@ -26,17 +30,46 @@ def obtener_libreria_sellos():
         libreria[nombre_sin_ext] = ruta
     return libreria
 
+# --- GENERADOR DE EXCEL A PARTIR DE PLANTILLA ---
+def generar_excel_guia_remision(resumen_planos, fecha_texto, plantilla_path=PLANTILLA_EXCEL):
+    """
+    Carga la plantilla Excel (PLANTILLA_GR.xlsx), llena la fecha en J5, 
+    los códigos desde B10 y descripciones desde D10, y retorna los bytes.
+    """
+    if not os.path.exists(plantilla_path):
+        st.error(f"⚠️ No se encontró la plantilla `{plantilla_path}` en la carpeta del proyecto.")
+        return None
+
+    wb = openpyxl.load_workbook(plantilla_path)
+    
+    # Selecciona la hoja 'osp' o la hoja activa si 'osp' no está presente
+    if "osp" in wb.sheetnames:
+        ws = wb["osp"]
+    else:
+        ws = wb.active
+
+    # 1. Escribir Fecha en J5
+    ws["J5"] = fecha_texto
+
+    # 2. Llenar filas desde la B10 y D10
+    fila_inicio = 10
+    for idx, plano in enumerate(resumen_planos):
+        fila_actual = fila_inicio + idx
+        ws[f"B{fila_actual}"] = plano["Código de Plano"]
+        ws[f"D{fila_actual}"] = plano["Título / Descripción"]
+
+    # Guardar en memoria BytesIO para permitir descarga en Streamlit
+    output_stream = io.BytesIO()
+    wb.save(output_stream)
+    output_stream.seek(0)
+    return output_stream.getvalue()
+
 # --- DETECCIÓN INTELIGENTE DE CÓDIGO Y TÍTULO POR ETIQUETAS ---
 def extraer_datos_inteligentes_cajetin(pagina):
-    """
-    Extrae el Código del Plano y la Descripción debajo de "PROYECTO:" 
-    garantizando la correcta transformación espacial independientemente
-    de la rotación nativa (0°, 90°, 180°, 270°).
-    """
     rot = pagina.rotation
     texto_completo = pagina.get_text("text")
 
-    # 1. BÚSQUEDA DEL CÓDIGO DE PLANO (Por Expresión Regular)
+    # 1. BÚSQUEDA DEL CÓDIGO DE PLANO
     patron_codigo = r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}(?:-R\d+|-REV\d+)?\b'
     matches = re.findall(patron_codigo, texto_completo)
 
@@ -47,16 +80,16 @@ def extraer_datos_inteligentes_cajetin(pagina):
         if candidatos_validos:
             codigo_plano = candidatos_validos[0]
 
-    # 2. DIMENSIONES EN PANTALLA (VISTA REAL)
+    # 2. DIMENSIONES EN PANTALLA
     rect_pag = pagina.rect
     if rot in [90, 270]:
         ancho_v, alto_v = rect_pag.height, rect_pag.width
     else:
         ancho_v, alto_v = rect_pag.width, rect_pag.height
 
-    # 3. BUSCAR LA PALABRA "PROYECTO" EN MODO PALABRAS CON COORDENADAS DE VISTA
+    # 3. BUSCAR LA PALABRA "PROYECTO" EN VISTA
     words = pagina.get_text("words")
-    mat_directa = pagina.rotation_matrix  # Convierte Nativo -> Pantalla
+    mat_directa = pagina.rotation_matrix
 
     rect_proyecto_vista = None
 
@@ -66,20 +99,19 @@ def extraer_datos_inteligentes_cajetin(pagina):
             r_nativo = fitz.Rect(w[0], w[1], w[2], w[3])
             r_vista = r_nativo * mat_directa
             
-            # Verificar que la etiqueta 'PROYECTO' esté en el 50% inferior de la pantalla (cajetín)
             if r_vista.y0 > (alto_v * 0.50):
                 rect_proyecto_vista = r_vista
                 break
 
     titulo_plano = "No detectado"
 
-    # 4. CAPTURAR LA CASILLA JUSTO DEBAJO DE "PROYECTO" EN VISTA DE PANTALLA
+    # 4. CAPTURAR DESCRIPCIÓN DEBAJO DE "PROYECTO"
     if rect_proyecto_vista:
         view_box_desc = fitz.Rect(
-            rect_proyecto_vista.x0 - 40,   # Izquierda
-            rect_proyecto_vista.y1 + 2,    # Justo debajo del texto 'PROYECTO:'
-            rect_proyecto_vista.x0 + 380,  # Ancho de la casilla de descripción
-            rect_proyecto_vista.y1 + 110   # Alto de las 3 líneas
+            rect_proyecto_vista.x0 - 40,
+            rect_proyecto_vista.y1 + 2,
+            rect_proyecto_vista.x0 + 380,
+            rect_proyecto_vista.y1 + 110
         )
 
         mat_inversa = pagina.derotation_matrix
@@ -103,7 +135,7 @@ def extraer_datos_inteligentes_cajetin(pagina):
         if lineas_limpias:
             titulo_plano = " - ".join(lineas_limpias[:3])
 
-    # 5. FALLBACK SI NO SE ENCONTRÓ "PROYECTO" EN EL CAJETÍN
+    # 5. FALLBACK CAJETÍN INFERIOR DERECHO
     if titulo_plano == "No detectado":
         view_roi_cajetin = fitz.Rect(ancho_v * 0.55, alto_v * 0.70, ancho_v, alto_v)
         nat_roi_cajetin = view_roi_cajetin * pagina.derotation_matrix
@@ -139,8 +171,6 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
 
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
-            
-            # Evitar invadir la zona del cajetín principal (esquina inferior derecha)
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
@@ -233,7 +263,6 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         pagina = doc[i]
         rot = pagina.rotation
 
-        # Extracción inteligente de datos
         cod_plano, titulo_plano = extraer_datos_inteligentes_cajetin(pagina)
         resumen_planos.append({
             "Hoja": i + 1,
@@ -314,16 +343,11 @@ col_izq, col_der = st.columns([1, 1])
 
 with col_izq:
     archivo_pdf = st.file_uploader("1. Selecciona tu PDF consolidado:", type=["pdf"])
-    
-    # -------------------------------------------------------------
-    # Selector de fecha interactivo con calendario (st.date_input)
-    # -------------------------------------------------------------
     fecha_obj = st.date_input(
         "2. Fecha de Sellado:",
         value=datetime.date.today(),
         format="DD/MM/YYYY"
     )
-    # Formateamos la fecha seleccionada a cadena string DD/MM/YYYY
     texto_fecha = fecha_obj.strftime("%d/%m/%Y")
 
 libreria_archivos = obtener_libreria_sellos()
@@ -343,13 +367,42 @@ if archivo_pdf and sellos_seleccionados:
                 libreria_archivos, 
                 texto_fecha
             )
-            st.success("¡Láminas estampadas correctamente!")
+            
+            # Guardar resultados en sesión para mantener el estado
+            st.session_state['pdf_res'] = pdf_res
+            st.session_state['resumen'] = resumen
+            st.session_state['fecha_texto'] = texto_fecha
+            st.session_state['pdf_nombre'] = archivo_pdf.name
+
+if 'resumen' in st.session_state:
+    st.success("¡Láminas estampadas correctamente!")
+    
+    col_dl1, col_dl2 = st.columns([1, 1])
+    
+    with col_dl1:
+        st.download_button(
+            "📥 Descargar PDF Sellado", 
+            data=st.session_state['pdf_res'], 
+            file_name=f"SELLADO_{st.session_state['pdf_nombre']}", 
+            mime="application/pdf", 
+            use_container_width=True
+        )
+
+    with col_dl2:
+        # Generar el Excel basado en la plantilla PLANTILLA_GR.xlsx
+        excel_bytes = generar_excel_guia_remision(
+            st.session_state['resumen'], 
+            st.session_state['fecha_texto']
+        )
+        
+        if excel_bytes:
             st.download_button(
-                "📥 Descargar PDF Sellado", 
-                data=pdf_res, 
-                file_name=f"SELLADO_{archivo_pdf.name}", 
-                mime="application/pdf", 
+                "📊 Descargar Guía de Remisión (Excel)",
+                data=excel_bytes,
+                file_name=f"Guia_Remision_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-            st.subheader("📋 Resumen de Planos Detectados")
-            st.dataframe(resumen, use_container_width=True)
+
+    st.subheader("📋 Resumen de Planos Detectados")
+    st.dataframe(st.session_state['resumen'], use_container_width=True)
