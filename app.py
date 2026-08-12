@@ -26,20 +26,62 @@ def obtener_libreria_sellos():
         libreria[nombre_sin_ext] = ruta
     return libreria
 
-# --- DETECCIÓN RÁPIDA DE CAJETÍN ---
-def extraer_datos_cajetin(pagina):
-    texto_completo = pagina.get_text("text")
-    lineas = [l.strip() for l in texto_completo.split('\n') if len(l.strip()) > 3]
+# --- DETECCIÓN INTELIGENTE DE CÓDIGO Y TÍTULO POR ETIQUETAS ---
+def extraer_datos_inteligentes_cajetin(pagina):
+    words = pagina.get_text("words")
     
     codigo_plano = "No detectado"
-    for l in lineas:
-        match = re.search(r'[A-Z0-9]{2,}[-\_][A-Z0-9\-_]+', l)
+    titulo_plano = "No detectado"
+    
+    rect_codigo_label = None
+    rect_proyecto_label = None
+
+    # 1. Localizar coordenadas de las etiquetas en el cajetín
+    for w in words:
+        texto_clean = w[4].upper().strip()
+        if "CODIGO" in texto_clean or "CÓDIGO" in texto_clean:
+            rect_codigo_label = fitz.Rect(w[0], w[1], w[2], w[3])
+        elif "PROYECTO" in texto_clean:
+            rect_proyecto_label = fitz.Rect(w[0], w[1], w[2], w[3])
+
+    # 2. Extraer CÓDIGO cerca de la etiqueta "CODIGO:"
+    if rect_codigo_label:
+        search_area_cod = fitz.Rect(
+            rect_codigo_label.x0 - 10,
+            rect_codigo_label.y0,
+            rect_codigo_label.x1 + 300,
+            rect_codigo_label.y1 + 50
+        )
+        texto_area_cod = pagina.get_text("text", clip=search_area_cod).strip()
+        lineas_cod = [l.strip() for l in texto_area_cod.split('\n') if l.strip()]
+        
+        for l in lineas_cod:
+            if "CODIGO" not in l.upper() and "CÓDIGO" not in l.upper():
+                codigo_plano = l
+                break
+
+    # Fallback por Expresión Regular para el Código si falla el área
+    if codigo_plano == "No detectado":
+        texto_completo = pagina.get_text("text")
+        match = re.search(r'[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}', texto_completo)
         if match:
             codigo_plano = match.group(0)
-            break
-            
-    tres_filas = " | ".join(lineas[-4:]) if len(lineas) >= 4 else "Cajetín sin datos claros"
-    return tres_filas, codigo_plano
+
+    # 3. Extraer TÍTULO / DESCRIPCIÓN debajo de "PROYECTO:"
+    if rect_proyecto_label:
+        search_area_proj = fitz.Rect(
+            rect_proyecto_label.x0 - 20,
+            rect_proyecto_label.y1,
+            rect_proyecto_label.x0 + 400,
+            rect_proyecto_label.y1 + 120
+        )
+        texto_area_proj = pagina.get_text("text", clip=search_area_proj).strip()
+        lineas_proj = [l.strip() for l in texto_area_proj.split('\n') if l.strip()]
+        
+        if lineas_proj:
+            titulo_plano = " - ".join(lineas_proj)
+
+    return codigo_plano, titulo_plano
 
 # --- BÚSQUEDA DE ESPACIO LIBRE EN PANTALLA ---
 def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos):
@@ -54,7 +96,6 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
             
-            # Reserva para cajetín en esquina inferior derecha de la pantalla
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
@@ -87,19 +128,17 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- DIBUJO DEL SELLO VECTORIAL TOTALMENTE ENCUADRADO ---
+# --- DIBUJO DEL SELLO VECTORIAL ---
 def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
     color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
     linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
 
-    # Dibujar marco exterior rectangular
     shape = pagina.new_shape()
     shape.draw_rect(rect)
     shape.finish(color=color, fill=None, width=2.0)
     shape.commit()
 
     def dibujar_linea_texto(texto, prop_y, prop_size, fontname):
-        # Determinar dimensiones visuales en pantalla
         if rotacion in [90, 270]:
             ancho_ref_vista = rect.height
             alto_ref_vista = rect.width
@@ -114,14 +153,13 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
             fontsize = fontsize * ((ancho_ref_vista * 0.88) / ancho_txt)
             ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
-        # Mapeo exacto de coordenadas nativas para asegurar alineación dentro del rectángulo
         if rotacion == 0:
             pt = fitz.Point(rect.x0 + (rect.width / 2) - (ancho_txt / 2), rect.y0 + (rect.height * prop_y))
         elif rotacion == 90:
             pt = fitz.Point(rect.x0 + (rect.width * prop_y), rect.y1 - (rect.height / 2) + (ancho_txt / 2))
         elif rotacion == 270:
             pt = fitz.Point(rect.x1 - (rect.width * prop_y), rect.y0 + (rect.height / 2) - (ancho_txt / 2))
-        else: # 180
+        else:
             pt = fitz.Point(rect.x1 - (rect.width / 2) + (ancho_txt / 2), rect.y1 - (rect.height * prop_y))
 
         pagina.insert_text(
@@ -133,7 +171,6 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
             rotate=rotacion
         )
 
-    # Inserción ordenada de arriba hacia abajo dentro del recuadro
     dibujar_linea_texto("OSP INGENIERIA", 0.30, 0.18, "helv")
     dibujar_linea_texto(linea_2, 0.60, 0.22, "hebo")
     dibujar_linea_texto(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
@@ -151,20 +188,19 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         pagina = doc[i]
         rot = pagina.rotation
 
-        filas_desc, cod_plano = extraer_datos_cajetin(pagina)
+        # Extracción inteligente de datos
+        cod_plano, titulo_plano = extraer_datos_inteligentes_cajetin(pagina)
         resumen_planos.append({
             "Hoja": i + 1,
             "Código de Plano": cod_plano,
-            "Detalle Cajetín": filas_desc
+            "Título / Descripción": titulo_plano
         })
 
         pixmap = pagina.get_pixmap(dpi=100)
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
 
-        # Sello horizontal en vista de pantalla: 220px de ancho x 110px de alto
         ancho_sello_vista, alto_sello_vista = 220, 110
-
         sellos_puestos_hoja = []
 
         for item_sello in lista_sellos_elegidos:
@@ -176,7 +212,6 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             )
             sellos_puestos_hoja.append((x_px, y_px, ancho_sello_vista, alto_sello_vista))
 
-            # Coordenadas relativas en la pantalla (0.0 a 1.0)
             nx0 = x_px / pixmap.w
             ny0 = y_px / pixmap.h
             nx1 = (x_px + ancho_sello_vista) / pixmap.w
@@ -189,7 +224,6 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
                 ny1 * pagina.rect.height
             )
 
-            # Matriz de proyección al espacio nativo
             mat = pagina.derotation_matrix
             rect_sello = view_rect * mat
 
@@ -215,7 +249,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 st.set_page_config(page_title="Estampador de Planos A3", page_icon="📐", layout="wide")
 
 st.title("📐 ESTAMPADOR INTELIGENTE DE PLANOS A3")
-st.caption("Encuadre exacto de texto dentro del rectángulo en láminas rotadas")
+st.caption("Detección inteligente de Código y Proyecto por posición geométrica en cajetín")
 
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
@@ -248,7 +282,7 @@ st.divider()
 
 if archivo_pdf and sellos_seleccionados:
     if st.button("🚀 Estampar Documento", use_container_width=True):
-        with st.spinner("Estampando láminas..."):
+        with st.spinner("Estampando y leyendo datos de cajetines..."):
             pdf_res, resumen = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
@@ -263,5 +297,5 @@ if archivo_pdf and sellos_seleccionados:
                 mime="application/pdf", 
                 use_container_width=True
             )
-            st.subheader("📋 Resumen de Planos")
+            st.subheader("📋 Resumen de Planos Detectados")
             st.dataframe(resumen, use_container_width=True)
