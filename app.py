@@ -6,7 +6,7 @@ import tempfile
 import os
 import glob
 import re
-from datetime import datetime
+import datetime
 
 # --- CONFIGURACIÓN DE CARPETAS ---
 CARPETA_SELLOS = "firmas_sellos"
@@ -55,7 +55,6 @@ def extraer_datos_inteligentes_cajetin(pagina):
         ancho_v, alto_v = rect_pag.width, rect_pag.height
 
     # 3. BUSCAR LA PALABRA "PROYECTO" EN MODO PALABRAS CON COORDENADAS DE VISTA
-    # Para trabajar en coordenadas de pantalla, aplicamos la matriz directa a cada palabra
     words = pagina.get_text("words")
     mat_directa = pagina.rotation_matrix  # Convierte Nativo -> Pantalla
 
@@ -64,12 +63,10 @@ def extraer_datos_inteligentes_cajetin(pagina):
     for w in words:
         texto_word = w[4].upper().strip()
         if "PROYECTO" in texto_word:
-            # Rectángulo nativo de la palabra 'PROYECTO'
             r_nativo = fitz.Rect(w[0], w[1], w[2], w[3])
-            # Transformar a coordenadas de pantalla
             r_vista = r_nativo * mat_directa
             
-            # Verificar que la etiqueta 'PROYECTO' esté en el 40% inferior de la pantalla (cajetín)
+            # Verificar que la etiqueta 'PROYECTO' esté en el 50% inferior de la pantalla (cajetín)
             if r_vista.y0 > (alto_v * 0.50):
                 rect_proyecto_vista = r_vista
                 break
@@ -78,8 +75,6 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
     # 4. CAPTURAR LA CASILLA JUSTO DEBAJO DE "PROYECTO" EN VISTA DE PANTALLA
     if rect_proyecto_vista:
-        # En pantalla, la celda de la descripción está justo ABAJO de 'PROYECTO:'
-        # Nos desplazamos en Y_vista hacia abajo y extendemos el ancho hacia la derecha/izquierda
         view_box_desc = fitz.Rect(
             rect_proyecto_vista.x0 - 40,   # Izquierda
             rect_proyecto_vista.y1 + 2,    # Justo debajo del texto 'PROYECTO:'
@@ -87,7 +82,6 @@ def extraer_datos_inteligentes_cajetin(pagina):
             rect_proyecto_vista.y1 + 110   # Alto de las 3 líneas
         )
 
-        # Convertir la caja de vista de vuelta al espacio NATIVO de la página
         mat_inversa = pagina.derotation_matrix
         nat_box_desc = view_box_desc * mat_inversa
 
@@ -97,15 +91,12 @@ def extraer_datos_inteligentes_cajetin(pagina):
         lineas_limpias = []
         for l in lineas:
             l_up = l.upper()
-            
-            # Palabras/Patrones a Descartar (Escalas gráficas, cotas, metrados)
             palabras_descarte = [
                 "ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "CÓDIGO", 
                 "500M", "100M", "200M", "300M", "400M", "ESCALA GRAFICA", "REVISION"
             ]
             
             if not any(k in l_up for k in palabras_descarte) and l != codigo_plano:
-                # Filtrar cotas/coordenadas como "200+358.24", "4138.000", "+360.04", "0", "100"
                 if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l) and len(l) > 3:
                     lineas_limpias.append(l)
 
@@ -114,7 +105,6 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
     # 5. FALLBACK SI NO SE ENCONTRÓ "PROYECTO" EN EL CAJETÍN
     if titulo_plano == "No detectado":
-        # ROI en pantalla: Cuarta parte inferior derecha (60% a 100% X, 75% a 100% Y)
         view_roi_cajetin = fitz.Rect(ancho_v * 0.55, alto_v * 0.70, ancho_v, alto_v)
         nat_roi_cajetin = view_roi_cajetin * pagina.derotation_matrix
 
@@ -150,6 +140,7 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
             
+            # Evitar invadir la zona del cajetín principal (esquina inferior derecha)
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
@@ -323,8 +314,17 @@ col_izq, col_der = st.columns([1, 1])
 
 with col_izq:
     archivo_pdf = st.file_uploader("1. Selecciona tu PDF consolidado:", type=["pdf"])
-    fecha_hoy = datetime.now().strftime("%d/%m/%Y")
-    texto_fecha = st.text_input("2. Fecha de Sellado:", value=fecha_hoy)
+    
+    # -------------------------------------------------------------
+    # Selector de fecha interactivo con calendario (st.date_input)
+    # -------------------------------------------------------------
+    fecha_obj = st.date_input(
+        "2. Fecha de Sellado:",
+        value=datetime.date.today(),
+        format="DD/MM/YYYY"
+    )
+    # Formateamos la fecha seleccionada a cadena string DD/MM/YYYY
+    texto_fecha = fecha_obj.strftime("%d/%m/%Y")
 
 libreria_archivos = obtener_libreria_sellos()
 opciones = ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"] + list(libreria_archivos.keys())
