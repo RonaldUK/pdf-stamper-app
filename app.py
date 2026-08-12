@@ -29,62 +29,92 @@ def obtener_libreria_sellos():
 # --- DETECCIÓN INTELIGENTE DE CÓDIGO Y TÍTULO POR ETIQUETAS ---
 def extraer_datos_inteligentes_cajetin(pagina):
     """
-    Extrae el código de plano mediante expresiones regulares de ingeniería
-    y el título delimitando la búsqueda a la región del cajetín inferior derecho.
+    Extrae Código de Plano por Regex y Descripción buscando la casilla 'PROYECTO:' 
+    en el último 25% inferior derecho tomando en cuenta la rotación de la lámina.
     """
-    # 1. Obtener dimensiones de la página nativa
-    ancho_pag = pagina.rect.width
-    alto_pag = pagina.rect.height
-
-    # 2. BÚSQUEDA DEL CÓDIGO DE PLANO (Patrones estándar de Ingeniería)
+    rot = pagina.rotation
     texto_completo = pagina.get_text("text")
-    
-    # Patrón 1: Ej. ME154-MCA-06-11-001-R1 o ME154-AR-06-11-012-R1 o similar (letras/números separados por guiones con revisión al final)
+
+    # 1. BÚSQUEDA DEL CÓDIGO DE PLANO (Independiente de región o rotación)
     patron_codigo = r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}(?:-R\d+|-REV\d+)?\b'
     matches = re.findall(patron_codigo, texto_completo)
 
     codigo_plano = "No detectado"
     if matches:
-        # Filtrar posibles coincidencias que contengan palabras no deseadas
         falsos_positivos = ["ESCALA", "FECHA", "PROYECTO", "TUBOS", "INDICADA"]
         candidatos_validos = [m for m in matches if not any(fp in m for fp in falsos_positivos)]
         if candidatos_validos:
-            codigo_plano = candidatos_validos[0]  # Tomamos el primer código válido
+            codigo_plano = candidatos_validos[0]
 
-    # Si no encontró patrón complejo, buscar patrón simple de código: ej. ME-154-001 o similar
-    if codigo_plano == "No detectado":
-        patron_secundario = r'\b[A-Z]{2,}\d+-[A-Z0-9\-]+\b'
-        matches_sec = re.findall(patron_secundario, texto_completo)
-        if matches_sec:
-            codigo_plano = matches_sec[0]
+    # 2. DELIMITAR REGIÓN EN PANTALLA: Cuarta parte inferior derecha (75% al 100% en X e Y)
+    # Calculamos primero en espacio de vista (pantalla)
+    ancho_p = pagina.rect.width
+    alto_p = pagina.rect.height
 
-    # 3. BÚSQUEDA DEL TÍTULO / DESCRIPCIÓN (En la Región de Interés del Cajetín: 60%-100% X, 70%-100% Y)
-    roi_cajetin = fitz.Rect(ancho_pag * 0.55, alto_pag * 0.65, ancho_pag, alto_pag)
-    bloques_cajetin = pagina.get_text("blocks", clip=roi_cajetin)
+    if rot in [90, 270]:
+        ancho_vista, alto_vista = alto_p, ancho_p
+    else:
+        ancho_vista, alto_vista = ancho_p, alto_p
 
-    lineas_titulo = []
-    
-    for block in bloques_cajetin:
-        texto_bloque = block[4].strip()
-        lineas = [l.strip() for l in texto_bloque.split('\n') if l.strip()]
-        
+    # Rectángulo en pantalla del 25% inferior derecho
+    view_roi = fitz.Rect(ancho_vista * 0.70, alto_vista * 0.75, ancho_vista, alto_vista)
+
+    # Proyectar el ROI según la rotación de la página
+    mat = pagina.derotation_matrix
+    roi_nativo = view_roi * mat
+
+    # 3. EXTRAER PALABRAS DENTRO DE ESA REGIÓN
+    words_roi = pagina.get_text("words", clip=roi_nativo)
+
+    rect_proyecto = None
+    # Buscar la etiqueta "PROYECTO:" dentro de esa región
+    for w in words_roi:
+        texto_word = w[4].upper().strip()
+        if "PROYECTO" in texto_word:
+            rect_proyecto = fitz.Rect(w[0], w[1], w[2], w[3])
+            break
+
+    titulo_plano = "No detectado"
+
+    # 4. CAPTURAR LAS LÍNEAS DEBAJO DE "PROYECTO:"
+    if rect_proyecto:
+        # Definir una ventana vertical justo debajo de "PROYECTO:"
+        # En coordenadas de página nativa considerando rotación:
+        if rot == 0:
+            area_celda = fitz.Rect(rect_proyecto.x0 - 10, rect_proyecto.y1 + 2, rect_proyecto.x0 + 320, rect_proyecto.y1 + 80)
+        elif rot == 90:
+            area_celda = fitz.Rect(rect_proyecto.x0 - 80, rect_proyecto.y0 - 10, rect_proyecto.x0 - 2, rect_proyecto.y0 + 320)
+        elif rot == 270:
+            area_celda = fitz.Rect(rect_proyecto.x1 + 2, rect_proyecto.y0 - 10, rect_proyecto.x1 + 80, rect_proyecto.y0 + 320)
+        else: # 180
+            area_celda = fitz.Rect(rect_proyecto.x0 - 320, rect_proyecto.y0 - 80, rect_proyecto.x1 + 10, rect_proyecto.y0 - 2)
+
+        texto_celda = pagina.get_text("text", clip=area_celda).strip()
+        lineas = [l.strip() for l in texto_celda.split('\n') if l.strip()]
+
+        # Filtrar basuras de metrados o palabras reservadas
+        lineas_limpias = []
         for l in lineas:
-            # Descartar etiquetas genéricas e informaciones secundarias del cajetín
-            l_upper = l.upper()
-            palabras_ignorar = [
-                "PROYECTO:", "PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", 
-                "INDICADA", "JUNIO", "JULIO", "AGOSTO", "SETIEMBRE", "OCTUBRE", 
-                "NOVIEMBRE", "DICIEMBRE", "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO",
-                "ESCALA GRAFICA", "MINISTERIO", "MTC", "INTERSUR", "CAD", "REVISION"
-            ]
-            
-            # Si la línea no contiene palabras de ignorar y no es idéntica al código encontrado
-            if not any(pi in l_upper for pi in palabras_ignorar) and l != codigo_plano and len(l) > 3:
-                # Evitar incluir coordenadas o metrados sueltos
-                if not re.match(r'^\d+[\.\,\+]\d+$', l):
-                    lineas_titulo.append(l)
+            l_up = l.upper()
+            if not any(k in l_up for k in ["ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO"]):
+                if not re.match(r'^\d+[\.\,\+]\d+\s*m?$', l):
+                    lineas_limpias.append(l)
 
-    titulo_plano = " - ".join(lineas_titulo[:3]) if lineas_titulo else "No detectado"
+        if lineas_limpias:
+            # Tomamos hasta 3 líneas consecutivas que corresponden a la descripción
+            titulo_plano = " - ".join(lineas_limpias[:3])
+
+    # Fallback si no detecta la etiqueta exacta "PROYECTO" en rotaciones complejas
+    if titulo_plano == "No detectado":
+        texto_roi = pagina.get_text("text", clip=roi_nativo)
+        lineas_fallback = [l.strip() for l in texto_roi.split('\n') if len(l.strip()) > 3]
+        lineas_validas = []
+        for l in lineas_fallback:
+            if not any(k in l.upper() for k in ["ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "051+000"]):
+                if not re.match(r'^\d+[\.\,\+]\d+', l):
+                    lineas_validas.append(l)
+        if lineas_validas:
+            titulo_plano = " - ".join(lineas_validas[:3])
 
     return codigo_plano, titulo_plano
 
