@@ -29,13 +29,13 @@ def obtener_libreria_sellos():
 # --- DETECCIÓN INTELIGENTE DE CÓDIGO Y TÍTULO POR ETIQUETAS ---
 def extraer_datos_inteligentes_cajetin(pagina):
     """
-    Extrae Código de Plano por Regex y Descripción buscando la casilla 'PROYECTO:' 
-    en el último 25% inferior derecho tomando en cuenta la rotación de la lámina.
+    Extrae Código de Plano y Descripción manejando de forma nativa 
+    las rotaciones de 0°, 90°, 180° y 270° típicas de AutoCAD y Revit.
     """
     rot = pagina.rotation
     texto_completo = pagina.get_text("text")
 
-    # 1. BÚSQUEDA DEL CÓDIGO DE PLANO (Independiente de región o rotación)
+    # 1. EXTRAER CÓDIGO DE PLANO (Robusto a rotaciones)
     patron_codigo = r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}(?:-R\d+|-REV\d+)?\b'
     matches = re.findall(patron_codigo, texto_completo)
 
@@ -46,29 +46,11 @@ def extraer_datos_inteligentes_cajetin(pagina):
         if candidatos_validos:
             codigo_plano = candidatos_validos[0]
 
-    # 2. DELIMITAR REGIÓN EN PANTALLA: Cuarta parte inferior derecha (75% al 100% en X e Y)
-    # Calculamos primero en espacio de vista (pantalla)
-    ancho_p = pagina.rect.width
-    alto_p = pagina.rect.height
-
-    if rot in [90, 270]:
-        ancho_vista, alto_vista = alto_p, ancho_p
-    else:
-        ancho_vista, alto_vista = ancho_p, alto_p
-
-    # Rectángulo en pantalla del 25% inferior derecho
-    view_roi = fitz.Rect(ancho_vista * 0.70, alto_vista * 0.75, ancho_vista, alto_vista)
-
-    # Proyectar el ROI según la rotación de la página
-    mat = pagina.derotation_matrix
-    roi_nativo = view_roi * mat
-
-    # 3. EXTRAER PALABRAS DENTRO DE ESA REGIÓN
-    words_roi = pagina.get_text("words", clip=roi_nativo)
-
+    # 2. LOCALIZAR PALABRA CLAVE "PROYECTO" EN TODO EL PDF
+    words = pagina.get_text("words")
     rect_proyecto = None
-    # Buscar la etiqueta "PROYECTO:" dentro de esa región
-    for w in words_roi:
+
+    for w in words:
         texto_word = w[4].upper().strip()
         if "PROYECTO" in texto_word:
             rect_proyecto = fitz.Rect(w[0], w[1], w[2], w[3])
@@ -76,23 +58,23 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
     titulo_plano = "No detectado"
 
-    # 4. CAPTURAR LAS LÍNEAS DEBAJO DE "PROYECTO:"
+    # 3. EXTRAER TEXTO DEBAJO DE "PROYECTO:" SEGÚN EL ÁNGULO DE ROTACIÓN
     if rect_proyecto:
-        # Definir una ventana vertical justo debajo de "PROYECTO:"
-        # En coordenadas de página nativa considerando rotación:
+        # Ajustamos el desplazamiento vectorial según la rotación de la página
         if rot == 0:
-            area_celda = fitz.Rect(rect_proyecto.x0 - 10, rect_proyecto.y1 + 2, rect_proyecto.x0 + 320, rect_proyecto.y1 + 80)
+            area_celda = fitz.Rect(rect_proyecto.x0 - 20, rect_proyecto.y1 + 2, rect_proyecto.x0 + 350, rect_proyecto.y1 + 100)
         elif rot == 90:
-            area_celda = fitz.Rect(rect_proyecto.x0 - 80, rect_proyecto.y0 - 10, rect_proyecto.x0 - 2, rect_proyecto.y0 + 320)
+            # En 90°, "abajo" visualmente en pantalla es moverse hacia la izquierda en x nativo
+            area_celda = fitz.Rect(rect_proyecto.x0 - 100, rect_proyecto.y0 - 20, rect_proyecto.x0 - 2, rect_proyecto.y0 + 350)
         elif rot == 270:
-            area_celda = fitz.Rect(rect_proyecto.x1 + 2, rect_proyecto.y0 - 10, rect_proyecto.x1 + 80, rect_proyecto.y0 + 320)
-        else: # 180
-            area_celda = fitz.Rect(rect_proyecto.x0 - 320, rect_proyecto.y0 - 80, rect_proyecto.x1 + 10, rect_proyecto.y0 - 2)
+            # En 270°, "abajo" visualmente en pantalla es moverse hacia la derecha en x nativo
+            area_celda = fitz.Rect(rect_proyecto.x1 + 2, rect_proyecto.y0 - 20, rect_proyecto.x1 + 100, rect_proyecto.y0 + 350)
+        else: # 180°
+            area_celda = fitz.Rect(rect_proyecto.x0 - 350, rect_proyecto.y0 - 100, rect_proyecto.x1 + 20, rect_proyecto.y0 - 2)
 
         texto_celda = pagina.get_text("text", clip=area_celda).strip()
         lineas = [l.strip() for l in texto_celda.split('\n') if l.strip()]
 
-        # Filtrar basuras de metrados o palabras reservadas
         lineas_limpias = []
         for l in lineas:
             l_up = l.upper()
@@ -101,18 +83,31 @@ def extraer_datos_inteligentes_cajetin(pagina):
                     lineas_limpias.append(l)
 
         if lineas_limpias:
-            # Tomamos hasta 3 líneas consecutivas que corresponden a la descripción
             titulo_plano = " - ".join(lineas_limpias[:3])
 
-    # Fallback si no detecta la etiqueta exacta "PROYECTO" en rotaciones complejas
+    # 4. FALLBACK PARA PLANOS DE CAD CON TEXTO DESCOMPUESTO
     if titulo_plano == "No detectado":
+        # Usamos la matriz de derotación para obtener el último 30% del cajetín
+        ancho_p, alto_p = pagina.rect.width, pagina.rect.height
+        if rot in [90, 270]:
+            ancho_v, alto_v = alto_p, ancho_p
+        else:
+            ancho_v, alto_v = ancho_p, alto_p
+
+        view_roi = fitz.Rect(ancho_v * 0.55, alto_v * 0.65, ancho_v, alto_v)
+        roi_nativo = view_roi * pagina.derotation_matrix
+
         texto_roi = pagina.get_text("text", clip=roi_nativo)
         lineas_fallback = [l.strip() for l in texto_roi.split('\n') if len(l.strip()) > 3]
+        
         lineas_validas = []
         for l in lineas_fallback:
-            if not any(k in l.upper() for k in ["ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "051+000"]):
+            l_up = l.upper()
+            palabras_descarte = ["ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "MTC", "MINISTERIO", "INTERSUR", "051+000", "ESCALA GRAFICA"]
+            if not any(k in l_up for k in palabras_descarte) and l != codigo_plano:
                 if not re.match(r'^\d+[\.\,\+]\d+', l):
                     lineas_validas.append(l)
+
         if lineas_validas:
             titulo_plano = " - ".join(lineas_validas[:3])
 
