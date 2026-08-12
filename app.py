@@ -41,7 +41,7 @@ def extraer_datos_cajetin(pagina):
     tres_filas = " | ".join(lineas[-4:]) if len(lineas) >= 4 else "Cajetín sin datos claros"
     return tres_filas, codigo_plano
 
-# --- BÚSQUEDA DE ESPACIO EN 2 PASADAS (100% -> 80% -> FALLBACK) ---
+# --- BÚSQUEDA EN DOS PASADAS (100% -> 80% -> FALLBACK) ---
 def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos):
     _, binaria = cv2.threshold(imagen_gris, 230, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
@@ -55,11 +55,11 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
             
-            # Reserva para el cajetín (extremo inferior derecho)
+            # Reserva para el cajetín en pantalla (esquina inferior derecha)
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
-            # Evitar colisión con sellos colocados previamente
+            # Evitar superposición con otros sellos
             colision = False
             for (sx, sy, sw, sh) in sellos_ya_puestos:
                 if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
@@ -69,7 +69,7 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
             if colision:
                 continue
 
-            # Evaluar blancura
+            # Porcentaje de blancura
             caja = binaria[y : y + alto_sello, x : x + ancho_sello]
             pixeles_ocupados = cv2.countNonZero(caja)
             porcentaje_libre = 1.0 - (pixeles_ocupados / area_sello)
@@ -79,73 +79,62 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     if not candidatos:
         return 50, 50
 
-    # PASADA 1: Búsqueda estricta al 100% libre (>= 0.99)
+    # PASADA 1: Búsqueda estricta de espacio 100% libre
     for libre, x, y in candidatos:
         if libre >= 0.99:
             return x, y
 
-    # PASADA 2: Búsqueda al 80% libre (>= 0.80)
+    # PASADA 2: Búsqueda al 80% libre (solo si falló la pasada 1)
     for libre, x, y in candidatos:
         if libre >= 0.80:
             return x, y
 
-    # PASADA 3 (Fallback): Mejor posición disponible
+    # PASADA 3 (Fallback): La posición con mayor porcentaje libre disponible
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- DIBUJO DE SELLO VECTORIAL CON ROTACIÓN ORIENTADA AL USUARIO ---
-def agregar_sello_vectorial_orientado(pagina, rect, tipo_sello, texto_fecha, rotacion):
+# --- DIBUJO DEL SELLO VECTORIAL SIN ROTAR LA PÁGINA ---
+def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
     color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
     linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
 
-    # Dibujar la caja del sello
+    # Marco rectangular
     shape = pagina.new_shape()
     shape.draw_rect(rect)
     shape.finish(color=color, fill=None, width=2.0)
     shape.commit()
 
-    # Ángulo para contrarrestar la rotación del PDF y mantener el texto legible horizontalmente
+    # Si la página nativa está rotada 90° o 270°, el texto se orienta para leerse horizontalmente en pantalla
     angulo_texto = (360 - rotacion) % 360
 
     alto_caja = rect.height
     ancho_caja = rect.width
-
-    # Adaptar posición y dimensiones de texto según la orientación
-    if rotacion in [90, 270]:
-        # Si la página internamente está rotada 90/270, las proporciones de la caja están invertidas respecto a la vista
-        ancho_ref = alto_caja
-        alto_ref = ancho_caja
-    else:
-        ancho_ref = ancho_caja
-        alto_ref = alto_caja
-
     centro_x = rect.x0 + (ancho_caja / 2)
     centro_y = rect.y0 + (alto_caja / 2)
 
-    def dibujar_texto(texto, prop_y, prop_size, fontname):
-        fontsize = alto_ref * prop_size
-        ancho_texto = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
-        
-        if ancho_texto > (ancho_ref * 0.88):
-            fontsize = fontsize * ((ancho_ref * 0.88) / ancho_texto)
-            ancho_texto = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+    def dibujar_linea_texto(texto, prop, prop_size, fontname):
+        if rotacion in [90, 270]:
+            ref_tam = ancho_caja
+            ref_ancho = alto_caja
+        else:
+            ref_tam = alto_caja
+            ref_ancho = ancho_caja
+
+        fontsize = ref_tam * prop_size
+        ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+
+        if ancho_txt > (ref_ancho * 0.88):
+            fontsize = fontsize * ((ref_ancho * 0.88) / ancho_txt)
+            ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
         if rotacion == 0:
-            x_calc = centro_x - (ancho_texto / 2)
-            y_calc = rect.y0 + (alto_caja * prop_y)
-            pt = fitz.Point(x_calc, y_calc)
+            pt = fitz.Point(centro_x - (ancho_txt / 2), rect.y0 + (alto_caja * prop))
         elif rotacion == 90:
-            x_calc = rect.x0 + (ancho_caja * prop_y)
-            y_calc = centro_y + (ancho_texto / 2)
-            pt = fitz.Point(x_calc, y_calc)
+            pt = fitz.Point(rect.x0 + (ancho_caja * prop), centro_y + (ancho_txt / 2))
         elif rotacion == 270:
-            x_calc = rect.x1 - (ancho_caja * prop_y)
-            y_calc = centro_y - (ancho_texto / 2)
-            pt = fitz.Point(x_calc, y_calc)
+            pt = fitz.Point(rect.x1 - (ancho_caja * prop), centro_y - (ancho_txt / 2))
         else:
-            x_calc = centro_x - (ancho_texto / 2)
-            y_calc = rect.y1 - (alto_caja * prop_y)
-            pt = fitz.Point(x_calc, y_calc)
+            pt = fitz.Point(centro_x - (ancho_txt / 2), rect.y1 - (alto_caja * prop))
 
         pagina.insert_text(
             pt,
@@ -156,11 +145,11 @@ def agregar_sello_vectorial_orientado(pagina, rect, tipo_sello, texto_fecha, rot
             rotate=angulo_texto
         )
 
-    dibujar_texto("OSP INGENIERIA", 0.30, 0.18, "helv")
-    dibujar_texto(linea_2, 0.62, 0.22, "hebo")
-    dibujar_texto(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
+    dibujar_linea_texto("OSP INGENIERIA", 0.30, 0.18, "helv")
+    dibujar_linea_texto(linea_2, 0.62, 0.22, "hebo")
+    dibujar_linea_texto(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
 
-# --- PROCESAMIENTO PRINCIPAL ---
+# --- PROCESAMIENTO SIN ALTERAR LA ROTACIÓN DE LA PÁGINA ---
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_pdf.write(pdf_bytes)
@@ -171,12 +160,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
     for i in range(len(doc)):
         pagina = doc[i]
-        rotacion = pagina.rotation
-
-        # Renderizar la página exacto a como la ve el usuario
-        pixmap = pagina.get_pixmap(dpi=100)
-        img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
-        imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
+        rot = pagina.rotation
 
         # Resumen del cajetín
         filas_desc, cod_plano = extraer_datos_cajetin(pagina)
@@ -186,32 +170,54 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             "Detalle Cajetín": filas_desc
         })
 
-        # Dimensiones del sello según la vista del usuario
-        ancho_px_vista, alto_px_vista = 220, 110
+        # Renderizado exacto de la vista del usuario
+        pixmap = pagina.get_pixmap(dpi=100)
+        img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
+        imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
+
+        # Definir dimensiones en píxeles para la búsqueda según la orientación
+        if rot in [90, 270]:
+            ancho_search_px, alto_search_px = 110, 220
+        else:
+            ancho_search_px, alto_search_px = 220, 110
+
         sellos_puestos_hoja = []
 
         for item_sello in lista_sellos_elegidos:
-            # Buscar coordenadas de espacio libre en la vista del usuario
-            x_px, y_px = buscar_posicion_espacio_libre(imagen_gris, ancho_px_vista, alto_px_vista, sellos_puestos_hoja)
-            sellos_puestos_hoja.append((x_px, y_px, ancho_px_vista, alto_px_vista))
+            # 1. Búsqueda directa en la vista del usuario
+            x_px, y_px = buscar_posicion_espacio_libre(
+                imagen_gris, 
+                ancho_search_px, 
+                alto_search_px, 
+                sellos_puestos_hoja
+            )
+            sellos_puestos_hoja.append((x_px, y_px, ancho_search_px, alto_search_px))
 
-            # Transformar a coordenadas del canvas interno de PyMuPDF
-            f_x = pagina.rect.width / pixmap.w
-            f_y = pagina.rect.height / pixmap.h
+            # 2. Transformación directa a coordenadas de la página nativa usando matriz de des-rotación
+            # Coordenadas normalizadas (0.0 a 1.0)
+            nx0 = x_px / pixmap.w
+            ny0 = y_px / pixmap.h
+            nx1 = (x_px + ancho_search_px) / pixmap.w
+            ny1 = (y_px + alto_search_px) / pixmap.h
 
-            pdf_x0 = x_px * f_x
-            pdf_y0 = y_px * f_y
-            pdf_x1 = (x_px + ancho_px_vista) * f_x
-            pdf_y1 = (y_px + alto_px_vista) * f_y
+            # Rectángulo en el sistema de coordenadas visibles
+            view_rect = fitz.Rect(
+                nx0 * pagina.rect.width,
+                ny0 * pagina.rect.height,
+                nx1 * pagina.rect.width,
+                ny1 * pagina.rect.height
+            )
 
-            rect_sello = fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1)
+            # Matriz de PyMuPDF que mapea la vista directamente al PDF nativo sin tocar pagina.rotation
+            mat = pagina.derotation_matrix
+            rect_sello = view_rect * mat
 
+            # 3. Inserción directa
             if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
-                agregar_sello_vectorial_orientado(pagina, rect_sello, item_sello, texto_fecha, rotacion)
+                agregar_sello_vectorial(pagina, rect_sello, item_sello, texto_fecha, rot)
             else:
                 ruta_img = libreria_archivos[item_sello]
-                # Inserción de imagen considerando rotación
-                pagina.insert_image(rect_sello, filename=ruta_img, rotate=(360 - rotacion) % 360)
+                pagina.insert_image(rect_sello, filename=ruta_img, rotate=(360 - rot) % 360)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
     doc.save(output_pdf_path)
@@ -229,7 +235,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 st.set_page_config(page_title="Estampador de Planos A3", page_icon="📐", layout="wide")
 
 st.title("📐 ESTAMPADOR INTELIGENTE DE PLANOS A3")
-st.caption("Alineación automática de sellos siempre horizontal según vista de pantalla")
+st.caption("Detección de ejes y estampa alineada directamente sin alterar la estructura del PDF")
 
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
@@ -262,7 +268,7 @@ st.divider()
 
 if archivo_pdf and sellos_seleccionados:
     if st.button("🚀 Estampar Documento", use_container_width=True):
-        with st.spinner("Estampando láminas con orientación corregida..."):
+        with st.spinner("Estampando láminas..."):
             pdf_res, resumen = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
