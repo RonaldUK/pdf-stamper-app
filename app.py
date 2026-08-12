@@ -54,7 +54,7 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
             
-            # Reserva para cajetín en esquina inferior derecha
+            # Reserva para cajetín en esquina inferior derecha de la pantalla
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
@@ -87,29 +87,25 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- DIBUJO DEL SELLO VECTORIAL HORIZONTAL Y CORRECTAMENTE ORDENADO ---
+# --- DIBUJO DEL SELLO VECTORIAL TOTALMENTE ENCUADRADO ---
 def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
     color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
     linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
 
-    # Dibujar marco exterior
+    # Dibujar marco exterior rectangular
     shape = pagina.new_shape()
     shape.draw_rect(rect)
     shape.finish(color=color, fill=None, width=2.0)
     shape.commit()
 
-    angulo_texto = rotacion
-
-    alto_caja = rect.height
-    ancho_caja = rect.width
-
     def dibujar_linea_texto(texto, prop_y, prop_size, fontname):
+        # Determinar dimensiones visuales en pantalla
         if rotacion in [90, 270]:
-            ancho_ref_vista = alto_caja
-            alto_ref_vista = ancho_caja
+            ancho_ref_vista = rect.height
+            alto_ref_vista = rect.width
         else:
-            ancho_ref_vista = ancho_caja
-            alto_ref_vista = alto_caja
+            ancho_ref_vista = rect.width
+            alto_ref_vista = rect.height
 
         fontsize = alto_ref_vista * prop_size
         ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
@@ -118,15 +114,15 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
             fontsize = fontsize * ((ancho_ref_vista * 0.88) / ancho_txt)
             ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
-        # Cálculo preciso del punto de inserción para orden Top -> Bottom en pantalla
+        # Mapeo exacto de coordenadas nativas para asegurar alineación dentro del rectángulo
         if rotacion == 0:
-            pt = fitz.Point(rect.x0 + (ancho_caja / 2) - (ancho_txt / 2), rect.y0 + (alto_caja * prop_y))
+            pt = fitz.Point(rect.x0 + (rect.width / 2) - (ancho_txt / 2), rect.y0 + (rect.height * prop_y))
         elif rotacion == 90:
-            pt = fitz.Point(rect.x0 + (ancho_caja * prop_y), rect.y0 + (alto_caja / 2) - (ancho_txt / 2))
+            pt = fitz.Point(rect.x0 + (rect.width * prop_y), rect.y1 - (rect.height / 2) + (ancho_txt / 2))
         elif rotacion == 270:
-            pt = fitz.Point(rect.x1 - (ancho_caja * prop_y), rect.y1 - (alto_caja / 2) + (ancho_txt / 2))
+            pt = fitz.Point(rect.x1 - (rect.width * prop_y), rect.y0 + (rect.height / 2) - (ancho_txt / 2))
         else: # 180
-            pt = fitz.Point(rect.x1 - (ancho_caja / 2) + (ancho_txt / 2), rect.y1 - (alto_caja * prop_y))
+            pt = fitz.Point(rect.x1 - (rect.width / 2) + (ancho_txt / 2), rect.y1 - (rect.height * prop_y))
 
         pagina.insert_text(
             pt,
@@ -134,10 +130,10 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
             fontsize=fontsize,
             fontname=fontname,
             color=color,
-            rotate=angulo_texto
+            rotate=rotacion
         )
 
-    # Orden exacto: Arriba -> Centro -> Abajo
+    # Inserción ordenada de arriba hacia abajo dentro del recuadro
     dibujar_linea_texto("OSP INGENIERIA", 0.30, 0.18, "helv")
     dibujar_linea_texto(linea_2, 0.60, 0.22, "hebo")
     dibujar_linea_texto(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
@@ -166,7 +162,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
 
-        # En pantalla el sello SIEMPRE es horizontal: 220px de ancho x 110px de alto
+        # Sello horizontal en vista de pantalla: 220px de ancho x 110px de alto
         ancho_sello_vista, alto_sello_vista = 220, 110
 
         sellos_puestos_hoja = []
@@ -180,7 +176,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             )
             sellos_puestos_hoja.append((x_px, y_px, ancho_sello_vista, alto_sello_vista))
 
-            # Proyección de la vista al lienzo PDF
+            # Coordenadas relativas en la pantalla (0.0 a 1.0)
             nx0 = x_px / pixmap.w
             ny0 = y_px / pixmap.h
             nx1 = (x_px + ancho_sello_vista) / pixmap.w
@@ -193,7 +189,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
                 ny1 * pagina.rect.height
             )
 
-            # Matriz para des-rotar coordenadas al PDF nativo
+            # Matriz de proyección al espacio nativo
             mat = pagina.derotation_matrix
             rect_sello = view_rect * mat
 
@@ -219,7 +215,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 st.set_page_config(page_title="Estampador de Planos A3", page_icon="📐", layout="wide")
 
 st.title("📐 ESTAMPADOR INTELIGENTE DE PLANOS A3")
-st.caption("Alineación horizontal y orden correcto de texto en láminas rotadas")
+st.caption("Encuadre exacto de texto dentro del rectángulo en láminas rotadas")
 
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
