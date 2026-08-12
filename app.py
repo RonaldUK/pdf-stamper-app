@@ -84,7 +84,7 @@ def extraer_codigo_plano(pagina):
     Extrae texto del cajetín (generalmente ubicado en la esquina inferior derecha).
     """
     rect_pagina = pagina.rect
-    # Definir el ROI en el cuadrante inferior derecho (último 30% x, 25% y)
+    # Definir el ROI en el cuadrante inferior derecho (último 35% x, 30% y)
     roi_cajetin = fitz.Rect(
         rect_pagina.width * 0.65,
         rect_pagina.height * 0.70,
@@ -94,11 +94,11 @@ def extraer_codigo_plano(pagina):
     
     texto_cajetin = pagina.get_text("text", clip=roi_cajetin)
     
-    # Expresión regular común para detectar códigos de plano (Ejemplo: OSP-DWG-001, PL-A1, etc.)
-     lineas = [linea.strip() for linea in texto_cajetin.split('\n') if linea.strip()]
+    # Se corrige la sangría en esta línea
+    lineas = [linea.strip() for linea in texto_cajetin.split('\n') if linea.strip()]
     
     if lineas:
-        # Busca una línea con patrón alfanumérico largo
+        # Busca una línea con patrón alfanumérico
         for linea in lineas:
             if re.search(r'[A-Z0-9]{3,}[-\_][A-Z0-9]+', linea):
                 return linea
