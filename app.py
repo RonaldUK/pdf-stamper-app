@@ -26,15 +26,11 @@ def obtener_libreria_sellos():
         libreria[nombre_sin_ext] = ruta
     return libreria
 
-# --- DETECCIÓN RÁPIDA DE CAJETÍN SIN OCR PESADO ---
-def extraer_datos_cajetin_rapido(pagina):
-    """
-    Extrae texto de la página des-rotada de forma instantánea.
-    """
+# --- DETECCIÓN RÁPIDA DE CAJETÍN ---
+def extraer_datos_cajetin(pagina):
     texto_completo = pagina.get_text("text")
     lineas = [l.strip() for l in texto_completo.split('\n') if len(l.strip()) > 3]
     
-    # Buscar patrón de código de plano (ej. ME-154, PL-001, etc.)
     codigo_plano = "No detectado"
     for l in lineas:
         match = re.search(r'[A-Z0-9]{2,}[-\_][A-Z0-9\-_]+', l)
@@ -42,30 +38,29 @@ def extraer_datos_cajetin_rapido(pagina):
             codigo_plano = match.group(0)
             break
             
-    # Tomar las últimas líneas (donde suele estar el cajetín)
     tres_filas = " | ".join(lineas[-4:]) if len(lineas) >= 4 else "Cajetín sin datos claros"
     return tres_filas, codigo_plano
 
-# --- ALGORITMO DE ESPACIO LIBRE ROBUSTO ---
-def buscar_posicion_sello(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos):
-    # Invertir para detectar dibujo (negro = dibujo = 255)
+# --- BÚSQUEDA DE ABAJO-DERECHA HACIA ARRIBA-IZQUIERDA ---
+def buscar_posicion_abajo_derecha(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos, umbral_blanco):
     _, binaria = cv2.threshold(imagen_gris, 230, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
     area_sello = ancho_sello * alto_sello
     pad = 20
-
-    candidatos = []
     paso = 30
 
-    # Escanear la hoja
-    for y in range(30, alto_img - alto_sello - 30, paso):
-        for x in range(30, ancho_img - ancho_sello - 30, paso):
+    mejor_posicion = (50, 50)
+    max_porcentaje_libre = 0.0
+
+    # Recorrido inverso: de Derecha a Izquierda, y de Abajo hacia Arriba
+    for x in range(ancho_img - ancho_sello - 30, 30, -paso):
+        for y in range(alto_img - alto_sello - 30, 30, -paso):
             
-            # Evitar Cajetín Inferior Derecho
-            if x > (ancho_img * 0.55) and y > (alto_img * 0.70):
+            # Reserva para el cajetín (extremo inferior derecho absoluto)
+            if x > (ancho_img * 0.65) and y > (alto_img * 0.75):
                 continue
 
-            # Evitar Traslape/Chancado con sellos anteriores
+            # Evitar colisión con sellos asignados previamente en la misma página
             colision = False
             for (sx, sy, sw, sh) in sellos_ya_puestos:
                 if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
@@ -75,22 +70,24 @@ def buscar_posicion_sello(imagen_gris, ancho_sello, alto_sello, sellos_ya_puesto
             if colision:
                 continue
 
-            # Contar cuánto dibujo hay en este recuadro
+            # Evaluación de blancura en la ventana seleccionada
             caja = binaria[y : y + alto_sello, x : x + ancho_sello]
             pixeles_ocupados = cv2.countNonZero(caja)
             porcentaje_libre = 1.0 - (pixeles_ocupados / area_sello)
 
-            candidatos.append((porcentaje_libre, pixeles_ocupados, x, y))
+            # Si alcanza el umbral requerido (por defecto 70%), se selecciona de inmediato
+            if porcentaje_libre >= umbral_blanco:
+                return x, y
 
-    # Priorizar la zona con MÁS espacio en blanco (1.0 = 100% blanco)
-    candidatos.sort(key=lambda c: c[0], reverse=True)
+            # Guardar la mejor alternativa si no se llega al umbral ideal
+            if porcentaje_libre > max_porcentaje_libre:
+                max_porcentaje_libre = porcentaje_libre
+                mejor_posicion = (x, y)
 
-    if candidatos:
-        return candidatos[0][2], candidatos[0][3]
-    return 50, 50
+    return mejor_posicion
 
-# --- DIBUJO DE SELLO VECTORIAL SIN GIRAR ---
-def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
+# --- ESTAMPADO RESPETANDO ORIENTACIÓN ---
+def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha):
     color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
     linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
 
@@ -125,8 +122,8 @@ def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
     dibujar_texto(linea_2, 0.62, 0.22, "hebo")
     dibujar_texto(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
 
-# --- PROCESAMIENTO PRINCIPAL CON NORMALIZACIÓN DE ROTACIÓN ---
-def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
+# --- PROCESAMIENTO PRINCIPAL CON ROTACIÓN ADAPTATIVA ---
+def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha, umbral_blanco):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_pdf.write(pdf_bytes)
         path_pdf = tmp_pdf.name
@@ -137,18 +134,13 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
     for i in range(len(doc)):
         pagina = doc[i]
 
-        # CORRECCIÓN DE AUTOCAD: Si la página tiene rotación interna (90, 180, 270), la normalizamos a 0
-        rotacion_original = pagina.rotation
-        if rotacion_original != 0:
-            pagina.set_rotation(0)
-
-        # 1. Obtener imagen para detección espacial
-        pixmap = pagina.get_pixmap(dpi=100) # DPI 100 es súper rápido y liviano
+        # 1. Obtenemos el renderizado de la página TAL COMO SE VE (respetando rotación nativa)
+        pixmap = pagina.get_pixmap(dpi=100)
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
 
-        # 2. Resumen rápido
-        filas_desc, cod_plano = extraer_datos_cajetin_rapido(pagina)
+        # 2. Extracción de datos para el resumen
+        filas_desc, cod_plano = extraer_datos_cajetin(pagina)
         resumen_planos.append({
             "Hoja": i + 1,
             "Código de Plano": cod_plano,
@@ -160,14 +152,26 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
         sellos_puestos_hoja = []
 
-        for item_sello in lista_sellos_elegidos:
-            ancho_px, alto_px = 220, 110  # Mantener proporción horizontal siempre
+        # Determinar dimensiones según la orientación visible de la página
+        es_vertical = pagina.rect.height > pagina.rect.width
 
-            # Buscar mejor espacio blanco
-            x_px, y_px = buscar_posicion_sello(imagen_gris, ancho_px, alto_px, sellos_puestos_hoja)
+        for item_sello in lista_sellos_elegidos:
+            if es_vertical:
+                ancho_px, alto_px = 180, 90
+            else:
+                ancho_px, alto_px = 220, 110
+
+            # Búsqueda desde abajo-derecha hacia arriba-izquierda
+            x_px, y_px = buscar_posicion_abajo_derecha(
+                imagen_gris, 
+                ancho_px, 
+                alto_px, 
+                sellos_puestos_hoja, 
+                umbral_blanco
+            )
             sellos_puestos_hoja.append((x_px, y_px, ancho_px, alto_px))
 
-            # Convertir a coordenadas nativas del PDF
+            # Mapeo exacto a coordenadas PDF
             pdf_x0 = x_px * factor_x
             pdf_y0 = y_px * factor_y
             pdf_x1 = pdf_x0 + (ancho_px * factor_x)
@@ -176,10 +180,9 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             rect_sello = fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1)
 
             if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
-                agregar_sello_vectorial_pdf(pagina, rect_sello, item_sello, texto_fecha)
+                agregar_sello_vectorial(pagina, rect_sello, item_sello, texto_fecha)
             else:
                 ruta_img = libreria_archivos[item_sello]
-                # Inserción con alineación horizontal estricta
                 pagina.insert_image(rect_sello, filename=ruta_img)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
@@ -194,12 +197,19 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
     return pdf_final_bytes, resumen_planos
 
-# --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Estampador Rápido de Planos", page_icon="⚡", layout="wide")
+# --- INTERFAZ DE USUARIO ---
+st.set_page_config(page_title="Estampador A3 Inteligente", page_icon="📐", layout="wide")
 
-st.title("⚡ ESTAMPADOR ULTRA-RÁPIDO (AUTOCAD & REVIT)")
-st.caption("Corrección automática de rotación + Detección de espacio limpio sin demoras")
+st.title("📐 ESTAMPADOR INTELIGENTE DE PLANOS A3")
+st.caption("Detección de espacio desde abajo-derecha y adaptación de orientación automática")
 
+st.sidebar.header("⚙️ Ajuste de Sensibilidad")
+umbral_usuario = st.sidebar.slider(
+    "Mínimo % de Espacio Blanco Requerido:",
+    min_value=30, max_value=95, value=70, step=5
+) / 100.0
+
+st.sidebar.divider()
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
     nuevo_nombre = st.text_input("Nombre de la firma/sello:")
@@ -211,28 +221,41 @@ with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
             ruta_dest = os.path.join(CARPETA_SELLOS, f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}")
             with open(ruta_dest, "wb") as f:
                 f.write(archivo_nuevo.read())
-            st.sidebar.success("¡Guardado!")
+            st.sidebar.success("¡Sello Guardado!")
             st.rerun()
 
-archivo_pdf = st.file_uploader("1. Selecciona tu PDF consolidado:", type=["pdf"])
+col_izq, col_der = st.columns([1, 1])
 
-fecha_hoy = datetime.now().strftime("%d/%m/%Y")
-texto_fecha = st.text_input("2. Fecha de Sellado:", value=fecha_hoy)
+with col_izq:
+    archivo_pdf = st.file_uploader("1. Selecciona tu PDF consolidado:", type=["pdf"])
+    fecha_hoy = datetime.now().strftime("%d/%m/%Y")
+    texto_fecha = st.text_input("2. Fecha de Sellado:", value=fecha_hoy)
 
 libreria_archivos = obtener_libreria_sellos()
 opciones = ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"] + list(libreria_archivos.keys())
 
-sellos_seleccionados = st.multiselect("3. Selecciona Sellos/Firmas:", options=opciones, default=[opciones[0]])
+with col_der:
+    sellos_seleccionados = st.multiselect("3. Selecciona Sellos/Firmas a Aplicar:", options=opciones, default=[opciones[0]])
+
+st.divider()
 
 if archivo_pdf and sellos_seleccionados:
-    if st.button("🚀 Estampar Ahora", use_container_width=True):
-        with st.spinner("Procesando planos al instante..."):
+    if st.button("🚀 Estampar Documento", use_container_width=True):
+        with st.spinner("Procesando láminas y adaptando orientación..."):
             pdf_res, resumen = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
                 libreria_archivos, 
-                texto_fecha
+                texto_fecha,
+                umbral_usuario
             )
-            st.success("¡Proceso completado en segundos!")
-            st.download_button("📥 Descargar PDF Corregido", data=pdf_res, file_name=f"SELLADO_{archivo_pdf.name}", mime="application/pdf", use_container_width=True)
+            st.success("¡Sellado finalizado correctamente!")
+            st.download_button(
+                "📥 Descargar PDF Sellado", 
+                data=pdf_res, 
+                file_name=f"SELLADO_{archivo_pdf.name}", 
+                mime="application/pdf", 
+                use_container_width=True
+            )
+            st.subheader("📋 Planos Procesados")
             st.dataframe(resumen, use_container_width=True)
