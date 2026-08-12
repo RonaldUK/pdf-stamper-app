@@ -41,8 +41,8 @@ def extraer_datos_cajetin(pagina):
     tres_filas = " | ".join(lineas[-4:]) if len(lineas) >= 4 else "Cajetín sin datos claros"
     return tres_filas, codigo_plano
 
-# --- BÚSQUEDA EN DOS PASADAS CON FALLBACK GARANTIZADO ---
-def buscar_posicion_en_cascada(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos):
+# --- BÚSQUEDA STRICTA DE ABAJO-DERECHA EN 2 PASADAS ---
+def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos):
     _, binaria = cv2.threshold(imagen_gris, 230, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
     area_sello = ancho_sello * alto_sello
@@ -59,7 +59,7 @@ def buscar_posicion_en_cascada(imagen_gris, ancho_sello, alto_sello, sellos_ya_p
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
-            # Evitar colisión con otros sellos
+            # Evitar colisión con sellos colocados previamente en la misma página
             colision = False
             for (sx, sy, sw, sh) in sellos_ya_puestos:
                 if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
@@ -69,7 +69,7 @@ def buscar_posicion_en_cascada(imagen_gris, ancho_sello, alto_sello, sellos_ya_p
             if colision:
                 continue
 
-            # Calcular porcentaje libre de dibujo
+            # Evaluar blancura
             caja = binaria[y : y + alto_sello, x : x + ancho_sello]
             pixeles_ocupados = cv2.countNonZero(caja)
             porcentaje_libre = 1.0 - (pixeles_ocupados / area_sello)
@@ -79,46 +79,21 @@ def buscar_posicion_en_cascada(imagen_gris, ancho_sello, alto_sello, sellos_ya_p
     if not candidatos:
         return 50, 50
 
-    # PASADA 1: Buscar espacio casi perfecto (>= 98% blanco)
+    # PASADA 1: Búsqueda estricta de 100% libre (1.0)
     for libre, x, y in candidatos:
-        if libre >= 0.98:
+        if libre >= 0.99:
             return x, y
 
-    # PASADA 2: Buscar espacio aceptable (>= 80% blanco)
+    # PASADA 2: Búsqueda al 80% libre (>= 0.80) solo si no hubo 100%
     for libre, x, y in candidatos:
         if libre >= 0.80:
             return x, y
 
-    # PASADA 3 (Fallback): Ordenar de mayor a menor blancura y usar el mejor candidato disponible
+    # PASADA 3 (Fallback): Si está atestado de datos, elige la mejor zona disponible
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- TRANSFORMACIÓN DE COORDENADAS SEGÚN ROTACIÓN DE PÁGINA ---
-def obtener_rect_pdf_orientado(pagina, x_px, y_px, ancho_px, alto_px, pix_w, pix_h):
-    rot = pagina.rotation
-    rect_pag = pagina.rect
-
-    # Coordenadas normalizadas (0.0 a 1.0) en la imagen vista
-    nx0 = x_px / pix_w
-    ny0 = y_px / pix_h
-    nx1 = (x_px + ancho_px) / pix_w
-    ny1 = (y_px + alto_px) / pix_h
-
-    pw = rect_pag.width
-    ph = rect_pag.height
-
-    if rot == 0:
-        return fitz.Rect(nx0 * pw, ny0 * ph, nx1 * pw, ny1 * ph)
-    elif rot == 90:
-        return fitz.Rect(ny0 * pw, (1 - nx1) * ph, ny1 * pw, (1 - nx0) * ph)
-    elif rot == 180:
-        return fitz.Rect((1 - nx1) * pw, (1 - ny1) * ph, (1 - nx0) * pw, (1 - ny0) * ph)
-    elif rot == 270:
-        return fitz.Rect((1 - ny1) * pw, nx0 * ph, (1 - ny0) * pw, nx1 * ph)
-    
-    return fitz.Rect(nx0 * pw, ny0 * ph, nx1 * pw, ny1 * ph)
-
-# --- DIBUJO DE SELLO VECTORIAL ---
+# --- DIBUJO DE SELLO VECTORIAL SIN DEFORMACIÓN ---
 def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha):
     color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
     linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
@@ -154,7 +129,7 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha):
     dibujar_texto(linea_2, 0.62, 0.22, "hebo")
     dibujar_texto(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
 
-# --- PROCESAMIENTO PRINCIPAL ---
+# --- PROCESAMIENTO CON NORMALIZACIÓN DE ROTACIÓN ---
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_pdf.write(pdf_bytes)
@@ -166,7 +141,14 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
     for i in range(len(doc)):
         pagina = doc[i]
 
-        # Renderizar la vista de la página tal como se muestra en pantalla
+        # Guardar rotación original de AutoCAD/Revit
+        rotacion_original = pagina.rotation
+
+        # NORMALIZACIÓN: Forzamos la orientación a 0 para trabajar en coordenadas limpias
+        if rotacion_original != 0:
+            pagina.set_rotation(0)
+
+        # Renderizar en orientación normalizada
         pixmap = pagina.get_pixmap(dpi=100)
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
@@ -179,23 +161,35 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             "Detalle Cajetín": filas_desc
         })
 
+        factor_x = pagina.rect.width / pixmap.w
+        factor_y = pagina.rect.height / pixmap.h
+
         sellos_puestos_hoja = []
 
         for item_sello in lista_sellos_elegidos:
-            ancho_px, alto_px = 220, 110
+            ancho_px, alto_px = 220, 110  # Mantener proporción rectangular uniforme
 
-            # Búsqueda en cascada (1ª pasada > 98%, 2ª pasada > 80%, 3ª pasada mejor disponible)
-            x_px, y_px = buscar_posicion_en_cascada(imagen_gris, ancho_px, alto_px, sellos_puestos_hoja)
+            # Búsqueda en 2 Pasadas (100% -> 80% -> Fallback)
+            x_px, y_px = buscar_posicion_espacio_libre(imagen_gris, ancho_px, alto_px, sellos_puestos_hoja)
             sellos_puestos_hoja.append((x_px, y_px, ancho_px, alto_px))
 
-            # Transformar coordenadas considerando la rotación interna del PDF
-            rect_sello = obtener_rect_pdf_orientado(pagina, x_px, y_px, ancho_px, alto_px, pixmap.w, pixmap.h)
+            # Mapeo directo sobre página des-rotada
+            pdf_x0 = x_px * factor_x
+            pdf_y0 = y_px * factor_y
+            pdf_x1 = pdf_x0 + (ancho_px * factor_x)
+            pdf_y1 = pdf_y0 + (alto_px * factor_y)
+
+            rect_sello = fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1)
 
             if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
                 agregar_sello_vectorial(pagina, rect_sello, item_sello, texto_fecha)
             else:
                 ruta_img = libreria_archivos[item_sello]
                 pagina.insert_image(rect_sello, filename=ruta_img)
+
+        # RESTAURACIÓN: Re-rotamos la página a su orientación original si venía de CAD
+        if rotacion_original != 0:
+            pagina.set_rotation(rotacion_original)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
     doc.save(output_pdf_path)
@@ -210,10 +204,10 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
     return pdf_final_bytes, resumen_planos
 
 # --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Estampador Multicapa A3", page_icon="📑", layout="wide")
+st.set_page_config(page_title="Estampador de Planos A3", page_icon="📐", layout="wide")
 
-st.title("📑 ESTAMPADOR INTELIGENTE DE PLANOS A3")
-st.caption("Estrategia en cascada (98% → 80% → Fallback) y corrección de rotación CAD")
+st.title("📐 ESTAMPADOR INTELIGENTE DE PLANOS A3")
+st.caption("Estrategia 100% → 80% espacio libre y rotación sincronizada con el plano")
 
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
@@ -245,15 +239,15 @@ with col_der:
 st.divider()
 
 if archivo_pdf and sellos_seleccionados:
-    if st.button("🚀 Estampar Documento Completo", use_container_width=True):
-        with st.spinner("Procesando láminas..."):
+    if st.button("🚀 Estampar Documento", use_container_width=True):
+        with st.spinner("Estampando láminas..."):
             pdf_res, resumen = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
                 libreria_archivos, 
                 texto_fecha
             )
-            st.success("¡Todas las láminas fueron estampadas con éxito!")
+            st.success("¡Láminas estampadas correctamente sin deformaciones!")
             st.download_button(
                 "📥 Descargar PDF Sellado", 
                 data=pdf_res, 
