@@ -29,88 +29,112 @@ def obtener_libreria_sellos():
         libreria[nombre_sin_ext] = ruta
     return libreria
 
-# --- BÚSQUEDA ADAPTATIVA Y MULTI-PASO DE ZONA VACÍA ---
+# --- CAPTURA DEL CAJETÍN EN PLANOS A3 (3 FILAS + CÓDIGO) ---
+def extraer_datos_cajetin_a3(pagina):
+    """
+    Extrae la información clave del cajetín en formato A3:
+    1. Las 3 filas del bloque 'PROYECTO' (Descripción, Tramo, Detalle).
+    2. El código único del plano.
+    """
+    rect = pagina.rect
+    
+    # ROI del bloque central/izquierdo del cajetín (PROYECTO)
+    roi_proyecto = fitz.Rect(
+        rect.width * 0.50,
+        rect.height * 0.82,
+        rect.width * 0.80,
+        rect.height
+    )
+    
+    # ROI del bloque derecho del cajetín (CÓDIGO Y DATOS TÉCNICOS)
+    roi_codigo = fitz.Rect(
+        rect.width * 0.78,
+        rect.height * 0.82,
+        rect.width,
+        rect.height
+    )
+    
+    # --- 1. Extraer las 3 filas del Proyecto ---
+    texto_proyecto = pagina.get_text("text", clip=roi_proyecto)
+    lineas_proj = [l.strip() for l in texto_proyecto.split('\n') if l.strip()]
+    
+    # Filtrar encabezados no deseados
+    lineas_limpias = [
+        l for l in lineas_proj 
+        if not any(k in l.upper() for k in ["PROYECTO:", "ESCALA", "FECHA"])
+    ]
+    
+    filas_texto = " | ".join(lineas_limpias[:3]) if lineas_limpias else "Sin descripción detectada"
+
+    # --- 2. Extraer Código del Plano ---
+    texto_codigo = pagina.get_text("text", clip=roi_codigo)
+    lineas_cod = [l.strip() for l in texto_codigo.split('\n') if l.strip()]
+    
+    codigo_detectado = "No detectado"
+    for l in lineas_cod:
+        # Buscar patrones alfanuméricos tipo ME154-MCA-06-11-009-R1
+        coincidencia = re.search(r'[A-Z0-9]{2,}[-\_][A-Z0-9\-_]+', l)
+        if coincidencia:
+            codigo_detectado = coincidencia.group(0)
+            break
+            
+    if codigo_detectado == "No detectado" and lineas_cod:
+        codigo_detectado = lineas_cod[-1]
+
+    return filas_texto, codigo_detectado
+
+
+# --- BÚSQUEDA ADAPTATIVA PARA GARANTIZAR EL SELLO EN TODAS LAS HOJAS ---
 def buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px, umbral_tolerancia=UMBRAL_BLANCO_SECUNDARIO):
-    """
-    Busca espacio libre en 3 fases:
-    1. Fase Estricta (98% libre).
-    2. Fase Secundaria (Umbral dinámico, ej. 70% libre).
-    3. Fase Global (Retorna la zona con MENOR ocupación de toda la hoja).
-    """
     _, binaria = cv2.threshold(imagen_gris, 240, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
     paso = 20
     area_total_sello = ancho_sello_px * alto_sello_px
 
-    # Puntos límites de escaneo (evita bordes absolutos)
-    x_inicio, x_fin = ancho_img - ancho_sello_px - 20, 20
-    y_inicio, y_fin = alto_img - alto_sello_px - 20, 20
+    # Rangos de escaneo prioritarios en planos A3 (evitando el cajetín inferior derecho)
+    rangos_busqueda = [
+        # (x_inicio, x_fin, y_inicio, y_fin)
+        (ancho_img - ancho_sello_px - 20, int(ancho_img * 0.3), alto_img - alto_sello_px - 200, int(alto_img * 0.2)), # Zona media/derecha
+        (int(ancho_img * 0.5), 20, alto_img - alto_sello_px - 200, int(alto_img * 0.2)),                             # Zona media/izquierda
+        (ancho_img - ancho_sello_px - 20, 20, int(alto_img * 0.3), 20)                                               # Zona superior
+    ]
 
-    # Puntuación para la fase 3 (mejores coordenadas encontradas)
     min_pixeles = float('inf')
-    mejor_posicion = (ancho_img - ancho_sello_px - 30, alto_img - alto_sello_px - 30)
+    posicion_respaldo = (ancho_img - ancho_sello_px - 40, alto_img - alto_sello_px - 250)
 
-    # PASADA 1: Búsqueda de espacio casi 100% limpio (0.2% de ocupación máxima)
-    for x in range(x_inicio, x_fin, -paso):
-        for y in range(y_inicio, y_fin, -paso):
-            caja = binaria[y : y + alto_sello_px, x : x + ancho_sello_px]
-            pixeles_ocupados = cv2.countNonZero(caja)
-            
-            if pixeles_ocupados < (area_total_sello * 0.002):
-                return x, y
-            
-            if pixeles_ocupados < min_pixeles:
-                min_pixeles = pixeles_ocupados
-                mejor_posicion = (x, y)
+    # 1. Intentar encontrar una zona que cumpla con el % de blancura
+    for x_ini, x_fin, y_ini, y_fin in rangos_busqueda:
+        paso_x = -paso if x_ini > x_fin else paso
+        paso_y = -paso if y_ini > y_fin else paso
 
-    # PASADA 2: Búsqueda con umbral editable (ej. 70% blanco = max 30% ocupado)
-    max_ocupacion_permitida = area_total_sello * (1.0 - umbral_tolerancia)
-    
-    for x in range(x_inicio, x_fin, -paso):
-        for y in range(y_inicio, y_fin, -paso):
-            caja = binaria[y : y + alto_sello_px, x : x + ancho_sello_px]
-            pixeles_ocupados = cv2.countNonZero(caja)
-            
-            if pixeles_ocupados <= max_ocupacion_permitida:
-                return x, y
+        for x in range(x_ini, x_fin, paso_x):
+            for y in range(y_ini, y_fin, paso_y):
+                caja = binaria[y : y + alto_sello_px, x : x + ancho_sello_px]
+                if caja.shape[0] != alto_sello_px or caja.shape[1] != ancho_sello_px:
+                    continue
+                
+                pixeles_ocupados = cv2.countNonZero(caja)
+                porcentaje_libre = 1.0 - (pixeles_ocupados / area_total_sello)
 
-    # PASADA 3: Si ninguna zona cumplió la meta, devuelve la región menos saturada
-    return mejor_posicion
+                if porcentaje_libre >= umbral_tolerancia:
+                    return x, y
+
+                if pixeles_ocupados < min_pixeles:
+                    min_pixeles = pixeles_ocupados
+                    posicion_respaldo = (x, y)
+
+    # 2. Si no encontró espacio perfecto, retorna la zona más limpia disponible
+    return posicion_respaldo
 
 
-# --- EXTRAER CÓDIGO O NOMBRE DEL PLANO ---
-def extraer_codigo_plano(pagina):
-    """
-    Extrae texto del cajetín (generalmente ubicado en la esquina inferior derecha).
-    """
-    rect_pagina = pagina.rect
-    # Definir el ROI en el cuadrante inferior derecho (último 35% x, 30% y)
-    roi_cajetin = fitz.Rect(
-        rect_pagina.width * 0.65,
-        rect_pagina.height * 0.70,
-        rect_pagina.width,
-        rect_pagina.height
-    )
-    
-    texto_cajetin = pagina.get_text("text", clip=roi_cajetin)
-    
-    # Se corrige la sangría en esta línea
-    lineas = [linea.strip() for linea in texto_cajetin.split('\n') if linea.strip()]
-    
-    if lineas:
-        # Busca una línea con patrón alfanumérico
-        for linea in lineas:
-            if re.search(r'[A-Z0-9]{3,}[-\_][A-Z0-9]+', linea):
-                return linea
-        return lineas[-1]  # Retorna la última línea leída si no coincide el regex
-    
-    return f"Lámina_{pagina.number + 1}"
-
-
-# --- MOTOR DE PROCESAMIENTO AUMENTADO ---
+# --- MOTOR DE PROCESAMIENTO ---
 def agregar_sello_vectorial_pdf(pagina, rect, tipo_sello, texto_fecha):
-    color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
-    linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
+    if "CC" in tipo_sello:
+        color = (0.85, 0.05, 0.05)
+        linea_2 = "COPIA CONTROLADA"
+    else:
+        color = (0.0, 0.3, 0.75)
+        linea_2 = "COPIA INFORMATIVA"
 
     shape = pagina.new_shape()
     shape.draw_rect(rect)
@@ -151,16 +175,20 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         path_pdf = tmp_pdf.name
 
     doc = fitz.open(path_pdf)
-    codigos_planos = []  # Lista para almacenar los códigos detectados
+    resumen_planos = []
 
     for i in range(len(doc)):
         pagina = doc[i]
 
-        # 1. Extraer código del plano
-        codigo_detectado = extraer_codigo_plano(pagina)
-        codigos_planos.append({"Hoja": i + 1, "Código/Nombre": codigo_detectado})
+        # 1. Extraer 3 filas + código del plano en A3
+        filas_descripcion, codigo_plano = extraer_datos_cajetin_a3(pagina)
+        resumen_planos.append({
+            "Hoja": i + 1,
+            "Código de Plano": codigo_plano,
+            "Descripción / Cajetín (3 Filas)": filas_descripcion
+        })
 
-        # 2. Renderizar imagen para búsqueda de espacio vacíos
+        # 2. Renderizar imagen para búsqueda de espacios
         pixmap = pagina.get_pixmap(dpi=150)
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n).copy()
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
@@ -172,7 +200,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             ancho_sello_px = 250
             alto_sello_px = 120
 
-            # Búsqueda optimizada con tolerancia configurable
+            # Búsqueda optimizada
             x_px, y_px = buscar_zona_vacia(imagen_gris, ancho_sello_px, alto_sello_px, umbral_blanco)
 
             pdf_x = x_px * factor_x
@@ -188,7 +216,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
                 ruta_imagen = libreria_archivos[item_sello]
                 pagina.insert_image(rect_sello, filename=ruta_imagen)
 
-            # Marcar el espacio usado en la matriz para no encimar sellos múltiples
+            # Ocupar el espacio para evitar superposición
             cv2.rectangle(imagen_gris, (x_px, y_px), (x_px + ancho_sello_px, y_px + alto_sello_px), 0, -1)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
@@ -201,24 +229,24 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
     os.remove(path_pdf)
     os.remove(output_pdf_path)
 
-    return pdf_final_bytes, codigos_planos
+    return pdf_final_bytes, resumen_planos
 
 
 # --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Agente RZ - Estampado", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Agente RZ - Estampado A3", page_icon="🤖", layout="wide")
 
-st.title("🤖📑 AGENTE PARA ESTAMPAR")
-st.caption("Gestión de sellos y copias elaborado por RZ")
+st.title("🤖📑 AGENTE PARA ESTAMPAR PLANOS A3")
+st.caption("Gestión de sellos, copias y lectura de cajetín elaborado por RZ")
 
 # SIDEBAR DE CONFIGURACIÓN
 st.sidebar.header("⚙️ Ajustes de Algoritmo")
 umbral_usuario = st.sidebar.slider(
-    "Mínimo % de Espacio Blanco Requerido:",
+    "Mínimo % de Blancura Requerido:",
     min_value=30,
     max_value=95,
     value=70,
     step=5,
-    help="Si no encuentra espacio 100% libre, usará este porcentaje mínimo de blancura antes de colocar el sello."
+    help="Si no encuentra espacio 100% limpio, usará este umbral mínimo antes de posicionar el sello."
 ) / 100.0
 
 st.sidebar.divider()
@@ -243,8 +271,8 @@ with st.sidebar.expander("➕ Subir Firma/Imagen a Base de Datos", expanded=Fals
 
 st.divider()
 
-st.subheader("1. 📂 Cargar Plano / Documento PDF")
-archivo_pdf = st.file_uploader("Selecciona tu archivo PDF (A3 o Estándar):", type=["pdf"])
+st.subheader("1. 📂 Cargar Plano / Documento PDF (A3)")
+archivo_pdf = st.file_uploader("Selecciona tu archivo PDF (Formato A3):", type=["pdf"])
 
 st.divider()
 
@@ -270,9 +298,9 @@ st.divider()
 
 if archivo_pdf and sellos_seleccionados:
     if st.button(f"🚀 Estampar {len(sellos_seleccionados)} Sello(s) Seleccionado(s)", use_container_width=True):
-        with st.spinner("Procesando láminas, leyendo códigos y estampando..."):
+        with st.spinner("Procesando láminas A3, leyendo cajetines y aplicando sellos..."):
             try:
-                pdf_resultado, lista_codigos = procesar_pdf(
+                pdf_resultado, lista_resumen = procesar_pdf(
                     archivo_pdf.read(), 
                     sellos_seleccionados, 
                     libreria_archivos, 
@@ -280,7 +308,7 @@ if archivo_pdf and sellos_seleccionados:
                     umbral_usuario
                 )
                 
-                st.success("¡Documento estampado exitosamente en TODAS las hojas!")
+                st.success("¡Documento A3 estampado exitosamente en TODAS las hojas!")
                 
                 st.download_button(
                     label="📥 Descargar PDF Sellado",
@@ -290,9 +318,9 @@ if archivo_pdf and sellos_seleccionados:
                     use_container_width=True
                 )
 
-                # Despliegue de la lista de planos/códigos detectados
-                with st.expander("📋 Ver lista de planos detectados por página", expanded=True):
-                    st.dataframe(lista_codigos, use_container_width=True)
+                # Visualización ordenada de la lista requerida
+                st.subheader("📋 Lista de Planos Detectados")
+                st.dataframe(lista_resumen, use_container_width=True)
 
             except Exception as e:
                 st.error(f"Error durante el procesamiento: {e}")
