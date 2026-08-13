@@ -57,9 +57,6 @@ def extraer_numero_revision(codigo_plano):
     return ""
 
 def calcular_siguiente_correlativo(secuencia_base, offset):
-    """
-    Toma '8418-OSP-SG-2026' e incrementa 8418 + offset -> ('8419', '-OSP-SG-2026')
-    """
     match = re.match(r'^(\d+)(-.+)$', secuencia_base.strip())
     if match:
         num_actual = int(match.group(1))
@@ -69,55 +66,50 @@ def calcular_siguiente_correlativo(secuencia_base, offset):
     return secuencia_base, ""
 
 def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
-    """
-    Dibuja una línea diagonal que va desde B[fila_inicio_linea] hasta J[fila_fin_linea]
-    """
     if fila_inicio_linea >= fila_fin_linea:
-        return # No hay espacio libre para tachar
+        return
 
-    # B es columna 1 (0-indexed en openpyxl marker) -> col B = 1
-    # J es columna 9 -> col J = 9
-    marker_from = AnchorMarker(col=1, colOff=0, row=fila_inicio_linea - 1, rowOff=0)
-    marker_to = AnchorMarker(col=10, colOff=0, row=fila_fin_linea, rowOff=0)
-    
-    anchor = TwoCellAnchor(_from=marker_from, to=marker_to)
-    linea = Line()
-    # Asignar estilo de línea fina azul/gris
-    linea.solidFill = "4F81BD"
-    anchor.sp = linea
-    
-    ws.add_drawing(anchor)
+    try:
+        # Columna B = 1, Columna J = 9 (0-indexed)
+        marker_from = AnchorMarker(col=1, colOff=0, row=fila_inicio_linea - 1, rowOff=0)
+        marker_to = AnchorMarker(col=10, colOff=0, row=fila_fin_linea, rowOff=0)
+        anchor = TwoCellAnchor(_from=marker_from, to=marker_to)
+        shape = GroupShape()
+        anchor.sp = shape
+        ws.add_drawing(anchor)
+    except Exception:
+        pass
 
-# --- GENERADOR DE EXCEL POR ÁREA ---
+# --- GENERADOR MANTENIENDO EXACTAMENTE LA HOJA OSP ---
 def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, offset_correlativo, plantilla_path=PLANTILLA_EXCEL):
     if not os.path.exists(plantilla_path):
         st.error(f"⚠️ No se encontró la plantilla `{plantilla_path}` en la carpeta del proyecto.")
         return None, None
 
+    # Cargar directamente la plantilla completa
     wb = openpyxl.load_workbook(plantilla_path)
     ws = wb["osp"] if "osp" in wb.sheetnames else wb.active
 
-    # 1. Celda B6
+    # 1. Escribir área en B6
     ws["B6"] = obtener_texto_celda_b6(area)
 
-    # 2. Celda I5 con Correlativo Incremental y Negrita SOLO en el número
+    # 2. Correlativo en I5 (solo número en negrita)
     num_str, resto_str = calcular_siguiente_correlativo(secuencia_base, offset_correlativo)
     secuencia_completa = f"{num_str}{resto_str}"
 
     font_bold = InlineFont(b=True, rFont="Calibri", sz=11)
     font_normal = InlineFont(b=False, rFont="Calibri", sz=11)
     
-    # Formato con RichText
     rich_i5 = CellRichText([
         TextBlock(font_bold, num_str),
         TextBlock(font_normal, resto_str)
     ])
     ws["I5"] = rich_i5
 
-    # 3. Celda J5: Fecha
+    # 3. Fecha en J5
     ws["J5"] = fecha_texto
 
-    # 4. Llenar filas desde la B10
+    # 4. Rellenar solo los datos de los planos sobre el formato existente (filas 10 en adelante)
     fila_inicio = 10
     num_copias = COPIAS_POR_AREA.get(area.upper(), 2)
     cant_items = len(resumen_planos)
@@ -134,93 +126,30 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         ws[f"I{fila}"] = num_copias
         ws[f"J{fila}"] = 5
 
-    # 5. Agregar línea diagonal desaprovechada desde (última_fila + 1) hasta J44
+    # 5. Diagonal de cierre desde la fila siguiente a la última usada hasta la fila 44
     ultima_fila_usada = fila_inicio + cant_items - 1
     fila_diagonal_inicio = ultima_fila_usada + 1
     
-    try:
-        agregar_linea_diagonal_excel(ws, fila_diagonal_inicio, fila_fin_linea=44)
-    except Exception as e:
-        pass # Si la versión de openpyxl difiere en dibujos vectoriales
+    agregar_linea_diagonal_excel(ws, fila_diagonal_inicio, fila_fin_linea=44)
 
     output_stream = io.BytesIO()
     wb.save(output_stream)
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- GENERADOR DE PDF CONSOLIDADO DE GUÍAS DE REMISIÓN ---
-def generar_pdf_guias_consolidado(excels_info, resumen_planos, fecha_texto):
-    """
-    Crea un PDF limpio que contiene la vista de cada Guía de Remisión generada
-    """
-    doc_pdf = fitz.open()
-    
-    for item in excels_info:
-        area = item["area"]
-        secuencia = item["secuencia"]
-        copias = COPIAS_POR_AREA.get(area.upper(), 2)
-
-        # Crear página A4 vertical
-        page = doc_pdf.new_page(width=595, height=842)
-        
-        # Dibujar Marco del Documento
-        page.draw_rect(fitz.Rect(30, 30, 565, 812), color=(0, 0, 0), width=1)
-        
-        # Encabezados
-        page.insert_text(fitz.Point(40, 55), "GUIA DE REMISIÓN DE DOCUMENTOS", fontsize=14, fontname="hebo")
-        page.insert_text(fitz.Point(380, 50), f"Código Correlativo: {secuencia}", fontsize=10, fontname="hebo")
-        page.insert_text(fitz.Point(380, 65), f"Fecha: {fecha_texto}", fontsize=10, fontname="helv")
-        
-        page.insert_text(fitz.Point(40, 85), f"ÁREA: {obtener_texto_celda_b6(area)}", fontsize=11, fontname="hebo")
-        page.draw_line(fitz.Point(30, 95), fitz.Point(565, 95), color=(0,0,0), width=1)
-
-        # Encabezado Tabla
-        page.insert_text(fitz.Point(40, 110), "Código de Documento", fontsize=9, fontname="hebo")
-        page.insert_text(fitz.Point(200, 110), "Descripción", fontsize=9, fontname="hebo")
-        page.insert_text(fitz.Point(430, 110), "RV.", fontsize=9, fontname="hebo")
-        page.insert_text(fitz.Point(465, 110), "Copias", fontsize=9, fontname="hebo")
-        page.insert_text(fitz.Point(515, 110), "Propósito", fontsize=9, fontname="hebo")
-        
-        page.draw_line(fitz.Point(30, 118), fitz.Point(565, 118), color=(0,0,0), width=1)
-
-        y = 132
-        for plano in resumen_planos:
-            cod = plano["Código de Plano"]
-            desc = plano["Título / Descripción"][:45]
-            rev = str(extraer_numero_revision(cod))
-
-            page.insert_text(fitz.Point(40, y), cod, fontsize=8, fontname="helv")
-            page.insert_text(fitz.Point(200, y), desc, fontsize=8, fontname="helv")
-            page.insert_text(fitz.Point(435, y), rev, fontsize=8, fontname="helv")
-            page.insert_text(fitz.Point(475, y), str(copias), fontsize=8, fontname="helv")
-            page.insert_text(fitz.Point(530, y), "5", fontsize=8, fontname="helv")
-            y += 16
-            
-            if y > 700:
-                break
-
-        # Dibujar diagonal de cierre si queda espacio
-        if y < 700:
-            page.draw_line(fitz.Point(40, y + 5), fitz.Point(550, 750), color=(0.4, 0.4, 0.8), width=1)
-
-    pdf_buffer = io.BytesIO()
-    doc_pdf.save(pdf_buffer)
-    doc_pdf.close()
-    pdf_buffer.seek(0)
-    return pdf_buffer.getvalue()
-
-# --- DETECCIÓN INTELIGENTE DE CAJETÍN Y SELLADO PDF ---
+# --- DETECCIÓN INTELIGENTE DE CAJETÍN CON REGEX FLEXIBLE ---
 def extraer_datos_inteligentes_cajetin(pagina):
     rot = pagina.rotation
     texto_completo = pagina.get_text("text")
 
-    patron_codigo = r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}(?:-R\d+|-REV\d+)?\b'
+    # Pattern flexible que tolera hasta 2 espacios internos en grupos de letras/números
+    patron_codigo = r'\b[A-Z0-9]{1,4}(?:\s+[A-Z0-9]+){0,2}(?:-[A-Z0-9]+(?:\s+[A-Z0-9]+){0,2})*(?:-R\d+|-REV\d+)?\b'
     matches = re.findall(patron_codigo, texto_completo)
 
     codigo_plano = "No detectado"
     if matches:
         falsos_positivos = ["ESCALA", "FECHA", "PROYECTO", "TUBOS", "INDICADA"]
-        candidatos_validos = [m for m in matches if not any(fp in m for fp in falsos_positivos)]
+        candidatos_validos = [m.strip() for m in matches if not any(fp in m for fp in falsos_positivos) and len(m.strip()) > 6]
         if candidatos_validos:
             codigo_plano = candidatos_validos[0]
 
@@ -435,7 +364,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon="📐", layout="wide")
 
 st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
-st.caption("Procesamiento automático de planos A3 con incremento correlativo y trazado diagonal")
+st.caption("Procesamiento automático usando directamente la plantilla Excel")
 
 # Sidebar
 st.sidebar.header("📁 Cargar Nuevas Firmas")
@@ -483,7 +412,7 @@ st.divider()
 
 if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
     if st.button("🚀 Estampar PDF y Generar Todo", use_container_width=True):
-        with st.spinner("Estampando planos, calculando correlativos e insertando diagonales en guías..."):
+        with st.spinner("Procesando planos y rellenando la plantilla Excel..."):
             pdf_res, resumen = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
@@ -498,7 +427,6 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
                     rev_tag = f"R{rev_num}"
 
             excels_generados = {}
-            listado_guias_info = []
 
             for idx, area in enumerate(areas_seleccionadas):
                 excel_bytes, secuencia_inc = generar_excel_por_area(
@@ -515,46 +443,26 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
                         "nombre": nombre_excel,
                         "secuencia": secuencia_inc
                     }
-                    listado_guias_info.append({
-                        "area": area,
-                        "secuencia": secuencia_inc
-                    })
-
-            # Generar PDF Consolidado de todas las Guías de Remisión
-            pdf_guias_bytes = generar_pdf_guias_consolidado(listado_guias_info, resumen, texto_fecha)
 
             st.session_state['pdf_res'] = pdf_res
             st.session_state['resumen'] = resumen
             st.session_state['excels_generados'] = excels_generados
-            st.session_state['pdf_guias_bytes'] = pdf_guias_bytes
             st.session_state['pdf_nombre'] = f"{secuencia_gr}_{rev_tag}_PLANOS_SELLADOS.pdf"
 
 if 'resumen' in st.session_state:
     st.success("¡Documentos y Guías de Remisión procesados correctamente!")
     
-    st.subheader("📥 Descargas Consolidadas")
+    st.subheader("📥 Descargas")
     
-    col_pdf1, col_pdf2 = st.columns(2)
-    
-    with col_pdf1:
-        st.download_button(
-            "📄 Descargar PDF Planos Sellados", 
-            data=st.session_state['pdf_res'], 
-            file_name=st.session_state['pdf_nombre'], 
-            mime="application/pdf", 
-            use_container_width=True
-        )
-        
-    with col_pdf2:
-        st.download_button(
-            "📑 Descargar PDF Consolidado de Guías de Remisión", 
-            data=st.session_state['pdf_guias_bytes'], 
-            file_name=f"GUIAS_REMISION_CONSOLIDADAS_{datetime.datetime.now().strftime('%Y%m%d')}.pdf", 
-            mime="application/pdf", 
-            use_container_width=True
-        )
+    st.download_button(
+        "📄 Descargar PDF Planos Sellados", 
+        data=st.session_state['pdf_res'], 
+        file_name=st.session_state['pdf_nombre'], 
+        mime="application/pdf", 
+        use_container_width=True
+    )
 
-    st.markdown("#### 📊 Archivos Excel Individuales por Área:")
+    st.markdown("#### 📊 Archivos Excel Rellenados por Área:")
     cols_excels = st.columns(len(st.session_state['excels_generados']))
     
     for idx, (area, data_excel) in enumerate(st.session_state['excels_generados'].items()):
