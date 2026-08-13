@@ -9,6 +9,7 @@ import re
 import datetime
 import io
 import openpyxl
+import subprocess
 from openpyxl.cell.rich_text import TextBlock, CellRichText
 from openpyxl.cell.text import InlineFont
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
@@ -70,7 +71,6 @@ def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
         return
 
     try:
-        # Columna B = 1, Columna J = 9 (0-indexed)
         marker_from = AnchorMarker(col=1, colOff=0, row=fila_inicio_linea - 1, rowOff=0)
         marker_to = AnchorMarker(col=10, colOff=0, row=fila_fin_linea, rowOff=0)
         anchor = TwoCellAnchor(_from=marker_from, to=marker_to)
@@ -80,20 +80,67 @@ def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
     except Exception:
         pass
 
-# --- GENERADOR MANTENIENDO EXACTAMENTE LA HOJA OSP ---
+# --- CONVERSIÓN DE EXCEL A PDF ---
+def convertir_excel_a_pdf(excel_bytes):
+    """
+    Convierte el archivo Excel modificado a un PDF nativo utilizando LibreOffice en segundo plano
+    """
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
+            tmp_excel.write(excel_bytes)
+            tmp_excel_path = tmp_excel.name
+
+        out_dir = tempfile.gettempdir()
+        
+        # Ejecutar LibreOffice en modo headless para renderizar la hoja a PDF
+        cmd = ["libreoffice", "--headless", "--convert-to", "pdf", tmp_excel_path, "--outdir", out_dir]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+
+        expected_pdf_path = os.path.splitext(tmp_excel_path)[0] + ".pdf"
+        
+        if os.path.exists(expected_pdf_path):
+            with open(expected_pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            os.remove(tmp_excel_path)
+            os.remove(expected_pdf_path)
+            return pdf_bytes
+    except Exception:
+        pass
+    
+    if os.path.exists(tmp_excel_path):
+        os.remove(tmp_excel_path)
+    return None
+
+def unificar_pdfs(lista_pdf_bytes):
+    """
+    Une varios PDFs en un solo archivo PDF
+    """
+    pdf_final = fitz.open()
+    for b in lista_pdf_bytes:
+        if b:
+            doc_temp = fitz.open(stream=b, filetype="pdf")
+            pdf_final.insert_pdf(doc_temp)
+            doc_temp.close()
+
+    buffer = io.BytesIO()
+    pdf_final.save(buffer)
+    pdf_final.close()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+# --- GENERADOR SOBRE LA PLANTILLA OSP ---
 def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, offset_correlativo, plantilla_path=PLANTILLA_EXCEL):
     if not os.path.exists(plantilla_path):
         st.error(f"⚠️ No se encontró la plantilla `{plantilla_path}` en la carpeta del proyecto.")
         return None, None
 
-    # Cargar directamente la plantilla completa
     wb = openpyxl.load_workbook(plantilla_path)
     ws = wb["osp"] if "osp" in wb.sheetnames else wb.active
 
-    # 1. Escribir área en B6
+    # B6
     ws["B6"] = obtener_texto_celda_b6(area)
 
-    # 2. Correlativo en I5 (solo número en negrita)
+    # I5 con Correlativo
     num_str, resto_str = calcular_siguiente_correlativo(secuencia_base, offset_correlativo)
     secuencia_completa = f"{num_str}{resto_str}"
 
@@ -105,11 +152,8 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         TextBlock(font_normal, resto_str)
     ])
     ws["I5"] = rich_i5
-
-    # 3. Fecha en J5
     ws["J5"] = fecha_texto
 
-    # 4. Rellenar solo los datos de los planos sobre el formato existente (filas 10 en adelante)
     fila_inicio = 10
     num_copias = COPIAS_POR_AREA.get(area.upper(), 2)
     cant_items = len(resumen_planos)
@@ -126,7 +170,6 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         ws[f"I{fila}"] = num_copias
         ws[f"J{fila}"] = 5
 
-    # 5. Diagonal de cierre desde la fila siguiente a la última usada hasta la fila 44
     ultima_fila_usada = fila_inicio + cant_items - 1
     fila_diagonal_inicio = ultima_fila_usada + 1
     
@@ -137,21 +180,26 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- DETECCIÓN INTELIGENTE DE CAJETÍN CON REGEX FLEXIBLE ---
+# --- DETECCIÓN CORREGIDA DEL CÓDIGO DE PLANO ---
 def extraer_datos_inteligentes_cajetin(pagina):
     rot = pagina.rotation
     texto_completo = pagina.get_text("text")
 
-    # Pattern flexible que tolera hasta 2 espacios internos en grupos de letras/números
-    patron_codigo = r'\b[A-Z0-9]{1,4}(?:\s+[A-Z0-9]+){0,2}(?:-[A-Z0-9]+(?:\s+[A-Z0-9]+){0,2})*(?:-R\d+|-REV\d+)?\b'
-    matches = re.findall(patron_codigo, texto_completo)
+    # Expresión regular robusta para códigos tipo: 154-MCA-06-11-001-R1, ME154-AR-06-11-027-R1, ME 154-MCA-06-11-001-R1
+    patrones = [
+        r'\b(?:[A-Z0-9]{2,}\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9]+){3,}(?:-R\d+|-REV\d+)?\b',
+        r'\b\d+-[A-Z0-9]+-[0-9-]+(?:-R\d+|-REV\d+)?\b'
+    ]
 
     codigo_plano = "No detectado"
-    if matches:
-        falsos_positivos = ["ESCALA", "FECHA", "PROYECTO", "TUBOS", "INDICADA"]
-        candidatos_validos = [m.strip() for m in matches if not any(fp in m for fp in falsos_positivos) and len(m.strip()) > 6]
-        if candidatos_validos:
-            codigo_plano = candidatos_validos[0]
+    for pat in patrones:
+        matches = re.findall(pat, texto_completo, re.IGNORECASE)
+        if matches:
+            falsos_positivos = ["ESCALA", "FECHA", "PROYECTO", "TUBOS", "INDICADA", "DIBUJO", "PLANO", "REVISION"]
+            candidatos = [m.strip() for m in matches if not any(fp in m.upper() for fp in falsos_positivos)]
+            if candidatos:
+                codigo_plano = candidatos[0]
+                break
 
     rect_pag = pagina.rect
     if rot in [90, 270]:
@@ -364,7 +412,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon="📐", layout="wide")
 
 st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
-st.caption("Procesamiento automático usando directamente la plantilla Excel")
+st.caption("Procesamiento automático usando la plantilla Excel exacta")
 
 # Sidebar
 st.sidebar.header("📁 Cargar Nuevas Firmas")
@@ -427,6 +475,7 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
                     rev_tag = f"R{rev_num}"
 
             excels_generados = {}
+            lista_pdfs_guias = []
 
             for idx, area in enumerate(areas_seleccionadas):
                 excel_bytes, secuencia_inc = generar_excel_por_area(
@@ -438,10 +487,15 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
                 )
                 if excel_bytes:
                     nombre_excel = f"{secuencia_inc}_{rev_tag}_{area}.xlsx"
+                    pdf_excel = convertir_excel_a_pdf(excel_bytes)
+                    if pdf_excel:
+                        lista_pdfs_guias.append(pdf_excel)
+
                     excels_generados[area] = {
                         "bytes": excel_bytes,
                         "nombre": nombre_excel,
-                        "secuencia": secuencia_inc
+                        "secuencia": secuencia_inc,
+                        "pdf_bytes": pdf_excel
                     }
 
             st.session_state['pdf_res'] = pdf_res
@@ -449,18 +503,36 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
             st.session_state['excels_generados'] = excels_generados
             st.session_state['pdf_nombre'] = f"{secuencia_gr}_{rev_tag}_PLANOS_SELLADOS.pdf"
 
+            if lista_pdfs_guias:
+                st.session_state['pdf_guias_unificado'] = unificar_pdfs(lista_pdfs_guias)
+            else:
+                st.session_state['pdf_guias_unificado'] = None
+
 if 'resumen' in st.session_state:
     st.success("¡Documentos y Guías de Remisión procesados correctamente!")
     
-    st.subheader("📥 Descargas")
+    st.subheader("📥 Descargas Disponibles")
     
-    st.download_button(
-        "📄 Descargar PDF Planos Sellados", 
-        data=st.session_state['pdf_res'], 
-        file_name=st.session_state['pdf_nombre'], 
-        mime="application/pdf", 
-        use_container_width=True
-    )
+    col_dl1, col_dl2 = st.columns(2)
+    
+    with col_dl1:
+        st.download_button(
+            "📄 Descargar PDF Planos Sellados", 
+            data=st.session_state['pdf_res'], 
+            file_name=st.session_state['pdf_nombre'], 
+            mime="application/pdf", 
+            use_container_width=True
+        )
+
+    with col_dl2:
+        if st.session_state.get('pdf_guias_unificado'):
+            st.download_button(
+                "📑 Descargar PDF Consolidado de Guías de Remisión", 
+                data=st.session_state['pdf_guias_unificado'], 
+                file_name=f"GUIAS_REMISION_CONSOLIDADAS_{datetime.datetime.now().strftime('%Y%m%d')}.pdf", 
+                mime="application/pdf", 
+                use_container_width=True
+            )
 
     st.markdown("#### 📊 Archivos Excel Rellenados por Área:")
     cols_excels = st.columns(len(st.session_state['excels_generados']))
