@@ -76,7 +76,6 @@ def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
         return
 
     try:
-        # Columna B = col index 1, Columna J = col index 10 (0-indexed anchor)
         marker_from = AnchorMarker(col=1, colOff=0, row=fila_inicio_linea - 1, rowOff=0)
         marker_to = AnchorMarker(col=10, colOff=0, row=fila_fin_linea, rowOff=0)
         anchor = TwoCellAnchor(_from=marker_from, to=marker_to)
@@ -88,6 +87,9 @@ def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
 
 # --- CONVERSIÓN DE EXCEL A PDF ---
 def convertir_excel_a_pdf(excel_bytes):
+    """
+    Convierte el archivo Excel a PDF utilizando LibreOffice.
+    """
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
             tmp_excel.write(excel_bytes)
@@ -134,7 +136,16 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         return None, None
 
     wb = openpyxl.load_workbook(plantilla_path)
-    ws = wb["osp"] if "osp" in wb.sheetnames else wb.active
+    
+    # Asegurar que se use la hoja "osp" y que sea la única presente para la exportación a PDF limpia
+    if "osp" in wb.sheetnames:
+        ws = wb["osp"]
+        wb.active = ws
+        for sheet in wb.sheetnames:
+            if sheet != "osp":
+                del wb[sheet]
+    else:
+        ws = wb.active
 
     # 1. Área en B6
     ws["B6"] = obtener_texto_celda_b6(area)
@@ -172,7 +183,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         ws[f"I{fila}"] = num_copias
         ws[f"J{fila}"] = 5
 
-    # 5. Insertar línea diagonal en el espacio libre (de la fila siguiente a la fila 44)
+    # 5. Insertar línea diagonal en el espacio libre
     ultima_fila_usada = fila_inicio + cant_items - 1
     fila_diagonal_inicio = ultima_fila_usada + 1
     
@@ -183,12 +194,11 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- DETECCIÓN ESTRICTA DEL CÓDIGO DE PLANO (SIN ESPACIOS NI PALABRAS PREVIAS) ---
+# --- DETECCIÓN ESTRICTA DEL CÓDIGO DE PLANO ---
 def extraer_datos_inteligentes_cajetin(pagina):
     rot = pagina.rotation
     texto_completo = pagina.get_text("text")
 
-    # Regex estricta sin espacios para extraer ÚNICAMENTE el código exacto del plano
     patrones_codigo = [
         r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b',
         r'\b\d+-[A-Z0-9]+-[0-9-]+(?:-R\d+|-REV\d+)?\b'
@@ -514,7 +524,7 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
 if 'resumen' in st.session_state:
     st.success("¡Documentos y Guías de Remisión procesados correctamente!")
     
-    st.subheader("📥 Descargas Disponibles")
+    st.subheader("📥 Descargas Generales")
     
     col_dl1, col_dl2 = st.columns(2)
     
@@ -530,25 +540,38 @@ if 'resumen' in st.session_state:
     with col_dl2:
         if st.session_state.get('pdf_guias_unificado'):
             st.download_button(
-                "📑 Descargar PDF Consolidado de Guías de Remisión", 
+                "📑 Descargar PDF Consolidado de Guías (Todas las Áreas)", 
                 data=st.session_state['pdf_guias_unificado'], 
                 file_name=f"GUIAS_REMISION_CONSOLIDADAS_{datetime.datetime.now().strftime('%Y%m%d')}.pdf", 
                 mime="application/pdf", 
                 use_container_width=True
             )
 
-    st.markdown("#### 📊 Archivos Excel Rellenados por Área:")
+    st.divider()
+    st.markdown("#### 📊 Archivos Excel y PDF de Guías por Área:")
     cols_excels = st.columns(len(st.session_state['excels_generados']))
     
     for idx, (area, data_excel) in enumerate(st.session_state['excels_generados'].items()):
         with cols_excels[idx]:
+            # Botón Excel por Área
             st.download_button(
-                label=f"🟢 {data_excel['secuencia']} ({area})",
+                label=f"🟢 Excel: {data_excel['secuencia']} ({area})",
                 data=data_excel["bytes"],
                 file_name=data_excel["nombre"],
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                use_container_width=True,
+                key=f"excel_{area}"
             )
+            # Botón PDF Individual por Área
+            if data_excel.get("pdf_bytes"):
+                st.download_button(
+                    label=f"🔴 PDF: {data_excel['secuencia']} ({area})",
+                    data=data_excel["pdf_bytes"],
+                    file_name=f"{data_excel['secuencia']}_{area}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"pdf_{area}"
+                )
 
     st.divider()
     st.subheader("📋 Resumen de Planos Detectados")
