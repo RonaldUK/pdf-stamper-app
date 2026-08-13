@@ -68,10 +68,6 @@ def calcular_siguiente_correlativo(secuencia_base, offset):
 
 # --- LÍNEA DIAGONAL DE CIERRE EN EXCEL ---
 def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
-    """
-    Inserta la línea diagonal de cierre en el espacio libre disponible del Excel
-    desde la fila_inicio_linea hasta la fila_fin_linea (columna B a J).
-    """
     if fila_inicio_linea >= fila_fin_linea:
         return
 
@@ -85,11 +81,13 @@ def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
     except Exception:
         pass
 
-# --- CONVERSIÓN DE EXCEL A PDF ---
+# --- EXPORTAR HOJA EXCEL A PDF ---
 def convertir_excel_a_pdf(excel_bytes):
     """
-    Convierte el archivo Excel a PDF utilizando LibreOffice.
+    Exporta el Excel generado directamente a PDF utilizando LibreOffice.
     """
+    tmp_excel_path = None
+    expected_pdf_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
             tmp_excel.write(excel_bytes)
@@ -107,13 +105,15 @@ def convertir_excel_a_pdf(excel_bytes):
                 pdf_bytes = f.read()
             os.remove(tmp_excel_path)
             os.remove(expected_pdf_path)
-            return pdf_bytes
-    except Exception:
-        pass
-    
-    if os.path.exists(tmp_excel_path):
-        os.remove(tmp_excel_path)
-    return None
+            return pdf_bytes, None
+        else:
+            return None, "No se encontró el archivo PDF generado por LibreOffice."
+    except Exception as e:
+        if tmp_excel_path and os.path.exists(tmp_excel_path):
+            os.remove(tmp_excel_path)
+        if expected_pdf_path and os.path.exists(expected_pdf_path):
+            os.remove(expected_pdf_path)
+        return None, f"Error en conversión: {str(e)}. Verifica que 'packages.txt' esté creado."
 
 def unificar_pdfs(lista_pdf_bytes):
     pdf_final = fitz.open()
@@ -137,7 +137,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
 
     wb = openpyxl.load_workbook(plantilla_path)
     
-    # Asegurar que se use la hoja "osp" y que sea la única presente para la exportación a PDF limpia
+    # Aislar hoja 'osp' para que sea la única exportada al PDF
     if "osp" in wb.sheetnames:
         ws = wb["osp"]
         wb.active = ws
@@ -183,7 +183,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         ws[f"I{fila}"] = num_copias
         ws[f"J{fila}"] = 5
 
-    # 5. Insertar línea diagonal en el espacio libre
+    # 5. Linea diagonal de cierre
     ultima_fila_usada = fila_inicio + cant_items - 1
     fila_diagonal_inicio = ultima_fila_usada + 1
     
@@ -473,7 +473,7 @@ st.divider()
 
 if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
     if st.button("🚀 Estampar PDF y Generar Todo", use_container_width=True):
-        with st.spinner("Procesando planos y rellenando la plantilla Excel..."):
+        with st.spinner("Procesando planos, rellenando Excel y exportando PDFs..."):
             pdf_res, resumen = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
@@ -489,6 +489,7 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
 
             excels_generados = {}
             lista_pdfs_guias = []
+            errores_pdf = []
 
             for idx, area in enumerate(areas_seleccionadas):
                 excel_bytes, secuencia_inc = generar_excel_por_area(
@@ -500,9 +501,12 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
                 )
                 if excel_bytes:
                     nombre_excel = f"{secuencia_inc}_{rev_tag}_{area}.xlsx"
-                    pdf_excel = convertir_excel_a_pdf(excel_bytes)
+                    pdf_excel, error_msg = convertir_excel_a_pdf(excel_bytes)
+                    
                     if pdf_excel:
                         lista_pdfs_guias.append(pdf_excel)
+                    elif error_msg:
+                        errores_pdf.append(f"{area}: {error_msg}")
 
                     excels_generados[area] = {
                         "bytes": excel_bytes,
@@ -515,6 +519,7 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
             st.session_state['resumen'] = resumen
             st.session_state['excels_generados'] = excels_generados
             st.session_state['pdf_nombre'] = f"{secuencia_gr}_{rev_tag}_PLANOS_SELLADOS.pdf"
+            st.session_state['errores_pdf'] = errores_pdf
 
             if lista_pdfs_guias:
                 st.session_state['pdf_guias_unificado'] = unificar_pdfs(lista_pdfs_guias)
@@ -524,6 +529,12 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
 if 'resumen' in st.session_state:
     st.success("¡Documentos y Guías de Remisión procesados correctamente!")
     
+    # Mostrar errores de conversión si ocurrieron por falta de LibreOffice
+    if st.session_state.get('errores_pdf'):
+        st.warning("⚠️ Ocurrió una observación al exportar los PDFs de los Excels:")
+        for err in st.session_state['errores_pdf']:
+            st.caption(f"- {err}")
+
     st.subheader("📥 Descargas Generales")
     
     col_dl1, col_dl2 = st.columns(2)
@@ -553,7 +564,7 @@ if 'resumen' in st.session_state:
     
     for idx, (area, data_excel) in enumerate(st.session_state['excels_generados'].items()):
         with cols_excels[idx]:
-            # Botón Excel por Área
+            # Botón 1: Descargar Excel
             st.download_button(
                 label=f"🟢 Excel: {data_excel['secuencia']} ({area})",
                 data=data_excel["bytes"],
@@ -562,7 +573,7 @@ if 'resumen' in st.session_state:
                 use_container_width=True,
                 key=f"excel_{area}"
             )
-            # Botón PDF Individual por Área
+            # Botón 2: Descargar PDF exportado del Excel
             if data_excel.get("pdf_bytes"):
                 st.download_button(
                     label=f"🔴 PDF: {data_excel['secuencia']} ({area})",
