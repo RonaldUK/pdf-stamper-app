@@ -15,6 +15,13 @@ from openpyxl.cell.text import InlineFont
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 from openpyxl.drawing.graphic import GroupShape
 
+# --- CONFIGURACIÓN DE MEDIDAS EN PAPEL (CENTÍMETROS REALES) ---
+CM_TO_PT = 28.3465         # 1 cm = 28.3465 puntos PDF
+CM_TO_PX_100DPI = 39.3701  # 1 cm = 39.37 px (para escaneo visual a 100 DPI)
+
+ANCHO_SELLO_CM = 7.1
+ALTO_SELLO_CM = 2.0
+
 # --- CONFIGURACIÓN DE CARPETAS Y PLANTILLA ---
 CARPETA_SELLOS = "firmas_sellos"
 PLANTILLA_EXCEL = "PLANTILLA_GR.xlsx"
@@ -83,9 +90,6 @@ def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
 
 # --- EXPORTAR HOJA EXCEL A PDF ---
 def convertir_excel_a_pdf(excel_bytes):
-    """
-    Exporta el Excel generado directamente a PDF utilizando LibreOffice.
-    """
     tmp_excel_path = None
     expected_pdf_path = None
     try:
@@ -137,7 +141,6 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
 
     wb = openpyxl.load_workbook(plantilla_path)
     
-    # Aislar hoja 'osp' para que sea la única exportada al PDF
     if "osp" in wb.sheetnames:
         ws = wb["osp"]
         wb.active = ws
@@ -147,10 +150,8 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     else:
         ws = wb.active
 
-    # 1. Área en B6
     ws["B6"] = obtener_texto_celda_b6(area)
 
-    # 2. Correlativo en I5
     num_str, resto_str = calcular_siguiente_correlativo(secuencia_base, offset_correlativo)
     secuencia_completa = f"{num_str}{resto_str}"
 
@@ -162,11 +163,8 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         TextBlock(font_normal, resto_str)
     ])
     ws["I5"] = rich_i5
-
-    # 3. Fecha en J5
     ws["J5"] = fecha_texto
 
-    # 4. Rellenar celdas de planos desde la fila 10
     fila_inicio = 10
     num_copias = COPIAS_POR_AREA.get(area.upper(), 2)
     cant_items = len(resumen_planos)
@@ -183,7 +181,6 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         ws[f"I{fila}"] = num_copias
         ws[f"J{fila}"] = 5
 
-    # 5. Linea diagonal de cierre
     ultima_fila_usada = fila_inicio + cant_items - 1
     fila_diagonal_inicio = ultima_fila_usada + 1
     
@@ -324,6 +321,7 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
+# --- SELLO VECTORIAL CON MEDIDAS EXACTAS EN CENTÍMETROS ---
 def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
     color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
     linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
@@ -333,15 +331,21 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
     shape.finish(color=color, fill=None, width=2.0)
     shape.commit()
 
-    def dibujar_linea_texto(texto, prop_y, prop_size, fontname):
-        if rotacion in [90, 270]:
-            ancho_ref_vista, alto_ref_vista = rect.height, rect.width
-        else:
-            ancho_ref_vista, alto_ref_vista = rect.width, rect.height
+    # Conversión de cm a puntos PDF para tamaños de letra
+    size_l1 = 0.40 * CM_TO_PT  # 0.40 cm = ~11.34 pt
+    size_l2 = 0.65 * CM_TO_PT  # 0.65 cm = ~18.43 pt
+    size_l3 = 0.40 * CM_TO_PT  # 0.40 cm = ~11.34 pt
 
-        fontsize = alto_ref_vista * prop_size
+    def dibujar_linea_texto(texto, prop_y, target_fontsize, fontname):
+        if rotacion in [90, 270]:
+            ancho_ref_vista = rect.height
+        else:
+            ancho_ref_vista = rect.width
+
+        fontsize = target_fontsize
         ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
+        # Protección para que el texto nunca desborde el 88% del ancho de 7.1 cm
         if ancho_txt > (ancho_ref_vista * 0.88):
             fontsize = fontsize * ((ancho_ref_vista * 0.88) / ancho_txt)
             ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
@@ -357,9 +361,10 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
 
         pagina.insert_text(pt, texto, fontsize=fontsize, fontname=fontname, color=color, rotate=rotacion)
 
-    dibujar_linea_texto("OSP INGENIERIA", 0.30, 0.18, "helv")
-    dibujar_linea_texto(linea_2, 0.60, 0.22, "hebo")
-    dibujar_linea_texto(f"FECHA: {texto_fecha}", 0.88, 0.16, "hebo")
+    # Posicionamiento dentro de los 2.0 cm de alto
+    dibujar_linea_texto("OSP INGENIERIA", 0.28, size_l1, "helv")
+    dibujar_linea_texto(linea_2, 0.62, size_l2, "hebo")
+    dibujar_linea_texto(f"FECHA: {texto_fecha}", 0.90, size_l3, "hebo")
 
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
@@ -384,7 +389,9 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
 
-        ancho_sello_vista, alto_sello_vista = 220, 110
+        # Dimensiones exactas de búsqueda en píxeles a 100 DPI
+        ancho_sello_vista = int(ANCHO_SELLO_CM * CM_TO_PX_100DPI)  # ~280 px
+        alto_sello_vista = int(ALTO_SELLO_CM * CM_TO_PX_100DPI)    # ~79 px
         sellos_puestos_hoja = []
 
         for item_sello in lista_sellos_elegidos:
@@ -529,7 +536,6 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
 if 'resumen' in st.session_state:
     st.success("¡Documentos y Guías de Remisión procesados correctamente!")
     
-    # Mostrar errores de conversión si ocurrieron por falta de LibreOffice
     if st.session_state.get('errores_pdf'):
         st.warning("⚠️ Ocurrió una observación al exportar los PDFs de los Excels:")
         for err in st.session_state['errores_pdf']:
@@ -564,7 +570,6 @@ if 'resumen' in st.session_state:
     
     for idx, (area, data_excel) in enumerate(st.session_state['excels_generados'].items()):
         with cols_excels[idx]:
-            # Botón 1: Descargar Excel
             st.download_button(
                 label=f"🟢 Excel: {data_excel['secuencia']} ({area})",
                 data=data_excel["bytes"],
@@ -573,7 +578,6 @@ if 'resumen' in st.session_state:
                 use_container_width=True,
                 key=f"excel_{area}"
             )
-            # Botón 2: Descargar PDF exportado del Excel
             if data_excel.get("pdf_bytes"):
                 st.download_button(
                     label=f"🔴 PDF: {data_excel['secuencia']} ({area})",
