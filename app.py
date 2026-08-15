@@ -19,15 +19,14 @@ from openpyxl.drawing.graphic import GroupShape
 # En especificación PDF: 1 pulgada = 2.54 cm = 72 pt -> 1 cm = 28.34645669 pt
 CM_TO_PT = 28.34645669
 
-ANCHO_SELLO_CM = 7.1  # 7.1 cm exactos en papel (201.26 pt)
-ALTO_SELLO_CM = 2.6   # 2.6 cm exactos en papel (73.70 pt)
+ANCHO_SELLO_CM = 7.1  # 7.1 cm exactos en papel
+ALTO_SELLO_CM = 2.6   # 2.6 cm exactos en papel
 
 # --- CONFIGURACIÓN DE CARPETAS Y PLANTILLA ---
 CARPETA_SELLOS = "firmas_sellos"
 PLANTILLA_EXCEL = "PLANTILLA_GR.xlsx"
 
-if not os.path.exists(CARPETA_SELLOS):
-    os.makedirs(CARPETA_SELLOS)
+os.makedirs(CARPETA_SELLOS, exist_ok=True)
 
 def obtener_libreria_sellos():
     extensiones = ('*.png', '*.jpg', '*.jpeg', '*.PNG', '*.JPG')
@@ -330,7 +329,6 @@ def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fe
         color = (0.0, 0.25, 0.75) # Azul
         linea_2 = "COPIA INFORMATIVA"
 
-    # Dibuja el marco rectangular (compatibilidad total con todas las versiones de PyMuPDF)
     shape = pagina.new_shape()
     try:
         shape.draw_rect(rect_nativo, radius=3)
@@ -343,10 +341,6 @@ def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fe
     linea_1 = "OSP INGENIERÍA"
     linea_3 = f"FECHA: {texto_fecha}"
 
-    # Distribución para altura de 2.6 cm:
-    # Línea 1: OSP INGENIERÍA (Negrita estilizada, ~13.5 pt)
-    # Línea 2: COPIA CONTROLADA (Negrita grande alargada, ~19 pt)
-    # Línea 3: FECHA: DD/MM/YYYY (Letra regular/fina 'helv', ~11.5 pt)
     filas_texto = [
         (linea_1, 0.23, 0.47 * CM_TO_PT, "hebo"),
         (linea_2, 0.58, 0.67 * CM_TO_PT, "hebo"),
@@ -437,20 +431,27 @@ st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon=
 st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
 st.caption("Procesamiento automático conservando la plantilla Excel exacta")
 
-# Sidebar
+# Sidebar - Cargar Nuevas Firmas
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
-    nuevo_nombre = st.text_input("Nombre de la firma/sello:")
-    archivo_nuevo = st.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
-    
-    if st.button("💾 Guardar Sello"):
-        if nuevo_nombre.strip() and archivo_nuevo:
-            ext = archivo_nuevo.name.split(".")[-1]
-            ruta_dest = os.path.join(CARPETA_SELLOS, f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}")
-            with open(ruta_dest, "wb") as f:
-                f.write(archivo_nuevo.read())
-            st.sidebar.success("¡Sello Guardado!")
-            st.rerun()
+    with st.sidebar.form("form_subir_sello", clear_on_submit=True):
+        nuevo_nombre = st.text_input("Nombre de la firma/sello:")
+        archivo_nuevo = st.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
+        btn_guardar = st.form_submit_button("💾 Guardar Sello", use_container_width=True)
+
+        if btn_guardar:
+            if nuevo_nombre.strip() and archivo_nuevo is not None:
+                ext = archivo_nuevo.name.split(".")[-1].lower()
+                nombre_limpio = re.sub(r'[^a-zA-Z0-9_]', '_', nuevo_nombre.lower().strip())
+                ruta_dest = os.path.join(CARPETA_SELLOS, f"{nombre_limpio}.{ext}")
+                
+                with open(ruta_dest, "wb") as f:
+                    f.write(archivo_nuevo.getvalue())
+                
+                st.success(f"¡Sello '{nuevo_nombre}' guardado exitosamente!")
+                st.rerun()
+            else:
+                st.warning("⚠️ Ingresa un nombre y selecciona una imagen antes de guardar.")
 
 col1, col2, col3 = st.columns([1.2, 1, 1])
 
