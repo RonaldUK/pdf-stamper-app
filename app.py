@@ -16,9 +16,8 @@ from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 from openpyxl.drawing.graphic import GroupShape
 
 # --- CONFIGURACIÓN DE MEDIDAS EXACTAS EN PAPEL (CENTÍMETROS REALES) ---
-# 1 pulgada = 2.54 cm = 72 puntos PDF (pt) -> 1 cm = 28.34645669 pt
+# En especificación PDF: 1 pulgada = 2.54 cm = 72 pt -> 1 cm = 28.34645669 pt
 CM_TO_PT = 28.34645669
-CM_TO_PX_100DPI = 39.37007874  # 1 cm = 100 / 2.54 px a 100 DPI para escaneo visual
 
 ANCHO_SELLO_CM = 7.1  # 7.1 cm exactos en papel (201.26 pt)
 ALTO_SELLO_CM = 2.0   # 2.0 cm exactos en papel (56.69 pt)
@@ -192,7 +191,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- DETECCIÓN ESTRICTA DEL CÓDIGO DE PLANO ---
+# --- DETECCIÓN DE CÓDIGO Y TÍTULO ---
 def extraer_datos_inteligentes_cajetin(pagina):
     rot = pagina.rotation
     texto_completo = pagina.get_text("text")
@@ -322,55 +321,55 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- SELLO VECTORIAL CON MEDIDAS EXACTAS EN PAPEL (7.1 cm x 2.0 cm) ---
-def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
-    color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
-    linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
+# --- SELLO VECTORIAL IDENTICO A LA FOTO REFERENCIAL ---
+def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fecha, rotacion):
+    if "CC" in tipo_sello:
+        color = (0.85, 0.0, 0.0)  # Rojo vivo del sello
+        linea_2 = "COPIA CONTROLADA"
+    else:
+        color = (0.0, 0.25, 0.75) # Azul
+        linea_2 = "COPIA INFORMATIVA"
 
-    # Dibujar borde del sello (rectángulo exacto)
+    # Dibuja el marco rectangular con esquinas suavemente redondeadas
     shape = pagina.new_shape()
-    shape.draw_rect(rect)
-    shape.finish(color=color, fill=None, width=2.0)
+    try:
+        shape.draw_rect(rect_nativo, radius=3)
+    except TypeError:
+        shape.draw_rect(rect_nativo)
+        
+    shape.finish(color=color, fill=None, width=1.8)
     shape.commit()
 
-    # Conversión exacta: 1 cm = 28.34645669 pt en especificación PDF
-    # Tamaños de letra exactos solicitados:
-    size_l1 = 0.40 * CM_TO_PT  # Cabecera: 0.40 cm = 11.34 pt
-    size_l2 = 0.65 * CM_TO_PT  # Tipo de Copia: 0.65 cm = 18.43 pt
-    size_l3 = 0.40 * CM_TO_PT  # Fecha: 0.40 cm = 11.34 pt
+    linea_1 = "OSP INGENIERÍA"
+    linea_3 = f"FECHA: {texto_fecha}"
 
-    def dibujar_linea_texto(texto, prop_y, target_fontsize, fontname):
-        # Determinar el ancho utilizable del sello en la orientación de la vista
-        if rotacion in [90, 270]:
-            ancho_ref_vista = rect.height
-        else:
-            ancho_ref_vista = rect.width
+    # Formato e intencionalidad exacta de la foto de referencia:
+    # Línea 1: OSP INGENIERÍA (Negrita, ~11 pt)
+    # Línea 2: COPIA CONTROLADA (Negrita grande destacada, ~15.5 pt)
+    # Línea 3: FECHA: DD/MM/YYYY (Letra regular/fina 'helv', ~10 pt)
+    filas_texto = [
+        (linea_1, 0.25, 0.38 * CM_TO_PT, "hebo"),
+        (linea_2, 0.60, 0.55 * CM_TO_PT, "hebo"),
+        (linea_3, 0.86, 0.35 * CM_TO_PT, "helv")
+    ]
 
+    for texto, prop_y, target_fontsize, fontname in filas_texto:
+        ancho_box = view_rect.width
         fontsize = target_fontsize
         ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
-        # Ajuste automático: si el texto excede el 90% del cuadro (6.39 cm), se escala
-        max_ancho_permitido = ancho_ref_vista * 0.90
-        if ancho_txt > max_ancho_permitido:
-            fontsize = fontsize * (max_ancho_permitido / ancho_txt)
+        max_ancho = ancho_box * 0.92
+        if ancho_txt > max_ancho:
+            fontsize = fontsize * (max_ancho / ancho_txt)
             ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
-        # Centrado del texto según el ángulo de rotación de la página
-        if rotacion == 0:
-            pt = fitz.Point(rect.x0 + (rect.width - ancho_txt) / 2, rect.y0 + (rect.height * prop_y))
-        elif rotacion == 90:
-            pt = fitz.Point(rect.x0 + (rect.width * prop_y), rect.y1 - (rect.height - ancho_txt) / 2)
-        elif rotacion == 270:
-            pt = fitz.Point(rect.x1 - (rect.width * prop_y), rect.y0 + (rect.height - ancho_txt) / 2)
-        else: # 180°
-            pt = fitz.Point(rect.x1 - (rect.width - ancho_txt) / 2, rect.y1 - (rect.height * prop_y))
+        x_vista = view_rect.x0 + (ancho_box - ancho_txt) / 2.0
+        y_vista = view_rect.y0 + (view_rect.height * prop_y)
 
-        pagina.insert_text(pt, texto, fontsize=fontsize, fontname=fontname, color=color, rotate=rotacion)
+        pt_vista = fitz.Point(x_vista, y_vista)
+        pt_nativo = pt_vista * pagina.derotation_matrix
 
-    # Posicionamiento proporcional optimizado para 2.0 cm de alto
-    dibujar_linea_texto("OSP INGENIERIA", 0.25, size_l1, "helv")
-    dibujar_linea_texto(linea_2, 0.62, size_l2, "hebo")
-    dibujar_linea_texto(f"FECHA: {texto_fecha}", 0.90, size_l3, "hebo")
+        pagina.insert_text(pt_nativo, texto, fontsize=fontsize, fontname=fontname, color=color, rotate=rotacion)
 
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
@@ -380,9 +379,8 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
     doc = fitz.open(path_pdf)
     resumen_planos = []
 
-    # Dimensiones exactas del sello en puntos de impresión en papel
-    ancho_sello_pt = ANCHO_SELLO_CM * CM_TO_PT  # 201.26 pt = 7.10 cm
-    alto_sello_pt = ALTO_SELLO_CM * CM_TO_PT    # 56.69 pt = 2.00 cm
+    ancho_sello_pt = ANCHO_SELLO_CM * CM_TO_PT
+    alto_sello_pt = ALTO_SELLO_CM * CM_TO_PT
 
     for i in range(len(doc)):
         pagina = doc[i]
@@ -399,9 +397,8 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
 
-        # Búsqueda en píxeles a 100 DPI
-        ancho_sello_px = int(ANCHO_SELLO_CM * CM_TO_PX_100DPI)
-        alto_sello_px = int(ALTO_SELLO_CM * CM_TO_PX_100DPI)
+        ancho_sello_px = int(ANCHO_SELLO_CM * 39.37007874)
+        alto_sello_px = int(ALTO_SELLO_CM * 39.37007874)
         sellos_puestos_hoja = []
 
         for item_sello in lista_sellos_elegidos:
@@ -410,19 +407,17 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             )
             sellos_puestos_hoja.append((x_px, y_px, ancho_sello_px, alto_sello_px))
 
-            # Mapeo exacto de coordenadas a puntos reales en papel (PDF pt)
-            x0_pt = (x_px / pixmap.w) * pagina.rect.width
-            y0_pt = (y_px / pixmap.h) * pagina.rect.height
+            x0_pt_view = x_px * 0.72
+            y0_pt_view = y_px * 0.72
 
-            # Garantiza las dimensiones exactas de 7.1 cm x 2.0 cm en papel
-            view_rect = fitz.Rect(x0_pt, y0_pt, x0_pt + ancho_sello_pt, y0_pt + alto_sello_pt)
-            rect_sello = view_rect * pagina.derotation_matrix
+            view_rect = fitz.Rect(x0_pt_view, y0_pt_view, x0_pt_view + ancho_sello_pt, y0_pt_view + alto_sello_pt)
+            rect_nativo = view_rect * pagina.derotation_matrix
 
             if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
-                agregar_sello_vectorial(pagina, rect_sello, item_sello, texto_fecha, rot)
+                agregar_sello_vectorial(pagina, view_rect, rect_nativo, item_sello, texto_fecha, rot)
             else:
                 ruta_img = libreria_archivos[item_sello]
-                pagina.insert_image(rect_sello, filename=ruta_img, rotate=rot)
+                pagina.insert_image(rect_nativo, filename=ruta_img, rotate=rot)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
     doc.save(output_pdf_path)
