@@ -15,12 +15,13 @@ from openpyxl.cell.text import InlineFont
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 from openpyxl.drawing.graphic import GroupShape
 
-# --- CONFIGURACIÓN DE MEDIDAS EN PAPEL (CENTÍMETROS REALES) ---
-CM_TO_PT = 28.3465         # 1 cm = 28.3465 puntos PDF
-CM_TO_PX_100DPI = 39.3701  # 1 cm = 39.37 px (para escaneo visual a 100 DPI)
+# --- CONFIGURACIÓN DE MEDIDAS EXACTAS EN PAPEL (CENTÍMETROS REALES) ---
+# 1 pulgada = 2.54 cm = 72 puntos PDF (pt) -> 1 cm = 28.34645669 pt
+CM_TO_PT = 28.34645669
+CM_TO_PX_100DPI = 39.37007874  # 1 cm = 100 / 2.54 px a 100 DPI para escaneo visual
 
-ANCHO_SELLO_CM = 7.1
-ALTO_SELLO_CM = 2.0
+ANCHO_SELLO_CM = 7.1  # 7.1 cm exactos en papel (201.26 pt)
+ALTO_SELLO_CM = 2.0   # 2.0 cm exactos en papel (56.69 pt)
 
 # --- CONFIGURACIÓN DE CARPETAS Y PLANTILLA ---
 CARPETA_SELLOS = "firmas_sellos"
@@ -117,7 +118,7 @@ def convertir_excel_a_pdf(excel_bytes):
             os.remove(tmp_excel_path)
         if expected_pdf_path and os.path.exists(expected_pdf_path):
             os.remove(expected_pdf_path)
-        return None, f"Error en conversión: {str(e)}. Verifica que 'packages.txt' esté creado."
+        return None, f"Error en conversión: {str(e)}. Verifica que LibreOffice esté instalado."
 
 def unificar_pdfs(lista_pdf_bytes):
     pdf_final = fitz.open()
@@ -321,22 +322,25 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- SELLO VECTORIAL CON MEDIDAS EXACTAS EN CENTÍMETROS ---
+# --- SELLO VECTORIAL CON MEDIDAS EXACTAS EN PAPEL (7.1 cm x 2.0 cm) ---
 def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
     color = (0.85, 0.05, 0.05) if "CC" in tipo_sello else (0.0, 0.3, 0.75)
     linea_2 = "COPIA CONTROLADA" if "CC" in tipo_sello else "COPIA INFORMATIVA"
 
+    # Dibujar borde del sello (rectángulo exacto)
     shape = pagina.new_shape()
     shape.draw_rect(rect)
     shape.finish(color=color, fill=None, width=2.0)
     shape.commit()
 
-    # Conversión de cm a puntos PDF para tamaños de letra
-    size_l1 = 0.40 * CM_TO_PT  # 0.40 cm = ~11.34 pt
-    size_l2 = 0.65 * CM_TO_PT  # 0.65 cm = ~18.43 pt
-    size_l3 = 0.40 * CM_TO_PT  # 0.40 cm = ~11.34 pt
+    # Conversión exacta: 1 cm = 28.34645669 pt en especificación PDF
+    # Tamaños de letra exactos solicitados:
+    size_l1 = 0.40 * CM_TO_PT  # Cabecera: 0.40 cm = 11.34 pt
+    size_l2 = 0.65 * CM_TO_PT  # Tipo de Copia: 0.65 cm = 18.43 pt
+    size_l3 = 0.40 * CM_TO_PT  # Fecha: 0.40 cm = 11.34 pt
 
     def dibujar_linea_texto(texto, prop_y, target_fontsize, fontname):
+        # Determinar el ancho utilizable del sello en la orientación de la vista
         if rotacion in [90, 270]:
             ancho_ref_vista = rect.height
         else:
@@ -345,24 +349,26 @@ def agregar_sello_vectorial(pagina, rect, tipo_sello, texto_fecha, rotacion):
         fontsize = target_fontsize
         ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
-        # Protección para que el texto nunca desborde el 88% del ancho de 7.1 cm
-        if ancho_txt > (ancho_ref_vista * 0.88):
-            fontsize = fontsize * ((ancho_ref_vista * 0.88) / ancho_txt)
+        # Ajuste automático: si el texto excede el 90% del cuadro (6.39 cm), se escala
+        max_ancho_permitido = ancho_ref_vista * 0.90
+        if ancho_txt > max_ancho_permitido:
+            fontsize = fontsize * (max_ancho_permitido / ancho_txt)
             ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
 
+        # Centrado del texto según el ángulo de rotación de la página
         if rotacion == 0:
-            pt = fitz.Point(rect.x0 + (rect.width / 2) - (ancho_txt / 2), rect.y0 + (rect.height * prop_y))
+            pt = fitz.Point(rect.x0 + (rect.width - ancho_txt) / 2, rect.y0 + (rect.height * prop_y))
         elif rotacion == 90:
-            pt = fitz.Point(rect.x0 + (rect.width * prop_y), rect.y1 - (rect.height / 2) + (ancho_txt / 2))
+            pt = fitz.Point(rect.x0 + (rect.width * prop_y), rect.y1 - (rect.height - ancho_txt) / 2)
         elif rotacion == 270:
-            pt = fitz.Point(rect.x1 - (rect.width * prop_y), rect.y0 + (rect.height / 2) - (ancho_txt / 2))
-        else:
-            pt = fitz.Point(rect.x1 - (rect.width / 2) + (ancho_txt / 2), rect.y1 - (rect.height * prop_y))
+            pt = fitz.Point(rect.x1 - (rect.width * prop_y), rect.y0 + (rect.height - ancho_txt) / 2)
+        else: # 180°
+            pt = fitz.Point(rect.x1 - (rect.width - ancho_txt) / 2, rect.y1 - (rect.height * prop_y))
 
         pagina.insert_text(pt, texto, fontsize=fontsize, fontname=fontname, color=color, rotate=rotacion)
 
-    # Posicionamiento dentro de los 2.0 cm de alto
-    dibujar_linea_texto("OSP INGENIERIA", 0.28, size_l1, "helv")
+    # Posicionamiento proporcional optimizado para 2.0 cm de alto
+    dibujar_linea_texto("OSP INGENIERIA", 0.25, size_l1, "helv")
     dibujar_linea_texto(linea_2, 0.62, size_l2, "hebo")
     dibujar_linea_texto(f"FECHA: {texto_fecha}", 0.90, size_l3, "hebo")
 
@@ -373,6 +379,10 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
     doc = fitz.open(path_pdf)
     resumen_planos = []
+
+    # Dimensiones exactas del sello en puntos de impresión en papel
+    ancho_sello_pt = ANCHO_SELLO_CM * CM_TO_PT  # 201.26 pt = 7.10 cm
+    alto_sello_pt = ALTO_SELLO_CM * CM_TO_PT    # 56.69 pt = 2.00 cm
 
     for i in range(len(doc)):
         pagina = doc[i]
@@ -389,25 +399,23 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         img_np = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.h, pixmap.w, pixmap.n)
         imagen_gris = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else img_np
 
-        # Dimensiones exactas de búsqueda en píxeles a 100 DPI
-        ancho_sello_vista = int(ANCHO_SELLO_CM * CM_TO_PX_100DPI)  # ~280 px
-        alto_sello_vista = int(ALTO_SELLO_CM * CM_TO_PX_100DPI)    # ~79 px
+        # Búsqueda en píxeles a 100 DPI
+        ancho_sello_px = int(ANCHO_SELLO_CM * CM_TO_PX_100DPI)
+        alto_sello_px = int(ALTO_SELLO_CM * CM_TO_PX_100DPI)
         sellos_puestos_hoja = []
 
         for item_sello in lista_sellos_elegidos:
             x_px, y_px = buscar_posicion_espacio_libre(
-                imagen_gris, ancho_sello_vista, alto_sello_vista, sellos_puestos_hoja
+                imagen_gris, ancho_sello_px, alto_sello_px, sellos_puestos_hoja
             )
-            sellos_puestos_hoja.append((x_px, y_px, ancho_sello_vista, alto_sello_vista))
+            sellos_puestos_hoja.append((x_px, y_px, ancho_sello_px, alto_sello_px))
 
-            nx0, ny0 = x_px / pixmap.w, y_px / pixmap.h
-            nx1, ny1 = (x_px + ancho_sello_vista) / pixmap.w, (y_px + alto_sello_vista) / pixmap.h
+            # Mapeo exacto de coordenadas a puntos reales en papel (PDF pt)
+            x0_pt = (x_px / pixmap.w) * pagina.rect.width
+            y0_pt = (y_px / pixmap.h) * pagina.rect.height
 
-            view_rect = fitz.Rect(
-                nx0 * pagina.rect.width, ny0 * pagina.rect.height,
-                nx1 * pagina.rect.width, ny1 * pagina.rect.height
-            )
-
+            # Garantiza las dimensiones exactas de 7.1 cm x 2.0 cm en papel
+            view_rect = fitz.Rect(x0_pt, y0_pt, x0_pt + ancho_sello_pt, y0_pt + alto_sello_pt)
             rect_sello = view_rect * pagina.derotation_matrix
 
             if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
