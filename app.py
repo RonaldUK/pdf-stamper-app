@@ -20,7 +20,7 @@ from openpyxl.drawing.graphic import GroupShape
 CM_TO_PT = 28.34645669
 
 ANCHO_SELLO_CM = 7.1  # 7.1 cm exactos en papel (201.26 pt)
-ALTO_SELLO_CM = 2.0   # 2.0 cm exactos en papel (56.69 pt)
+ALTO_SELLO_CM = 2.6   # 2.6 cm exactos en papel (73.70 pt)
 
 # --- CONFIGURACIÓN DE CARPETAS Y PLANTILLA ---
 CARPETA_SELLOS = "firmas_sellos"
@@ -321,7 +321,7 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- SELLO VECTORIAL IDENTICO A LA FOTO REFERENCIAL ---
+# --- SELLO VECTORIAL OPTIMIZADO (7.1 cm x 2.6 cm) ---
 def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fecha, rotacion):
     if "CC" in tipo_sello:
         color = (0.85, 0.0, 0.0)  # Rojo vivo del sello
@@ -343,14 +343,14 @@ def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fe
     linea_1 = "OSP INGENIERÍA"
     linea_3 = f"FECHA: {texto_fecha}"
 
-    # Formato e intencionalidad exacta de la foto de referencia:
-    # Línea 1: OSP INGENIERÍA (Negrita, ~11 pt)
-    # Línea 2: COPIA CONTROLADA (Negrita grande destacada, ~15.5 pt)
-    # Línea 3: FECHA: DD/MM/YYYY (Letra regular/fina 'helv', ~10 pt)
+    # Distribución para altura de 2.6 cm:
+    # Línea 1: OSP INGENIERÍA (Negrita estilizada, ~13.5 pt)
+    # Línea 2: COPIA CONTROLADA (Negrita grande alargada, ~19 pt)
+    # Línea 3: FECHA: DD/MM/YYYY (Letra regular/fina 'helv', ~11.5 pt)
     filas_texto = [
-        (linea_1, 0.25, 0.38 * CM_TO_PT, "hebo"),
-        (linea_2, 0.60, 0.55 * CM_TO_PT, "hebo"),
-        (linea_3, 0.86, 0.35 * CM_TO_PT, "helv")
+        (linea_1, 0.23, 0.47 * CM_TO_PT, "hebo"),
+        (linea_2, 0.58, 0.67 * CM_TO_PT, "hebo"),
+        (linea_3, 0.88, 0.41 * CM_TO_PT, "helv")
     ]
 
     for texto, prop_y, target_fontsize, fontname in filas_texto:
