@@ -330,11 +330,11 @@ def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fe
         color = (0.0, 0.25, 0.75) # Azul
         linea_2 = "COPIA INFORMATIVA"
 
-    # Dibuja el marco rectangular con esquinas suavemente redondeadas
+    # Dibuja el marco rectangular (compatibilidad total con todas las versiones de PyMuPDF)
     shape = pagina.new_shape()
     try:
         shape.draw_rect(rect_nativo, radius=3)
-    except TypeError:
+    except (TypeError, ValueError):
         shape.draw_rect(rect_nativo)
         
     shape.finish(color=color, fill=None, width=1.8)
