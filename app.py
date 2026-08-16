@@ -297,23 +297,23 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
     return codigo_plano, titulo_plano
 
-# --- ALGORITMO DE BÚSQUEDA Y PUNTUACIÓN DE ESPACIO LIBRE (RECORRE Y EVALÚA TODA LA HOJA) ---
-def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos):
+# --- ALGORITMO DE BÚSQUEDA Y PUNTUACIÓN DE ESPACIO LIBRE (CON PASO CONFIGURABLE) ---
+def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos, paso=10):
     _, binaria = cv2.threshold(imagen_gris, 230, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
     area_sello = ancho_sello * alto_sello
-    pad, paso = 20, 20
+    pad = 20
 
     candidatos = []
 
-    # Recorremos completamente la hoja evaluando todas las posiciones candidatas
+    # Recorremos la hoja evaluando la cuadrícula según el paso seleccionado
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
-            # Excluir el área del cajetín principal (cuadrante inferior derecho)
+            # Excluir la zona interna del cajetín principal (esquina inferior derecha)
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
-            # Comprobar colisión con otros sellos ya ubicados
+            # Comprobar si solapa con sellos puestos en la misma página
             colision = False
             for (sx, sy, sw, sh) in sellos_ya_puestos:
                 if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
@@ -323,16 +323,13 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
             if colision:
                 continue
 
-            # Contar los píxeles ocupados en la región
+            # Contar píxeles ocupados por dibujo o líneas
             caja = binaria[y : y + alto_sello, x : x + ancho_sello]
             pixeles_ocupados = cv2.countNonZero(caja)
             porcentaje_libre = 1.0 - (pixeles_ocupados / float(area_sello))
 
-            # --- SISTEMA DE PUNTUACIÓN (SCORE GLOBAL) ---
-            # 1. Porcentaje de espacio libre (peso primario)
+            # Puntuación combinada (Espacio blanco + Cercanía a la zona deseada)
             score_libre = porcentaje_libre * 100.0
-
-            # 2. Bonificación por posicionamiento estratégico (preferencia zona inferior-derecha permitida)
             factor_x = x / float(ancho_img)
             factor_y = y / float(alto_img)
             bonif_posicion = (factor_x * 5.0) + (factor_y * 5.0)
@@ -343,13 +340,13 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     if not candidatos:
         return 50, 50
 
-    # Ordenar candidatos de mayor a menor puntuación y seleccionar la MEJOR ZONA DE TODA LA HOJA
+    # Ordenar y seleccionar la posición con el mejor puntaje global
     candidatos.sort(key=lambda item: item[0], reverse=True)
     mejor_score, mejor_libre, mejor_x, mejor_y = candidatos[0]
 
     return mejor_x, mejor_y
 
-# --- ESTAMPADO DE SELLO DINÁMICO DESDE PNG (CC / CI) CON FECHA Y ENGROSADO DE LETRAS ---
+# --- ESTAMPADO DE SELLO DINÁMICO DESDE PNG (CC / CI) ---
 def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color_rgb, texto_fecha, rotacion):
     ruta_png = None
     posibles_rutas = [
@@ -362,14 +359,11 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
             ruta_png = r
             break
 
-    # Si NO existe la imagen PNG, no se crea ningún sello vectorial y se genera alerta
     if not ruta_png:
         return False, f"⚠️ No se encontró la imagen '{nombre_png}' en la carpeta raíz o en '{CARPETA_SELLOS}'."
 
-    # 1. Insertar la imagen PNG redimensionada
     pagina.insert_image(rect_nativo, filename=ruta_png, rotate=rotacion)
 
-    # 2. Parsear fecha (Día, Mes, Año)
     partes = re.split(r'[/.-]', texto_fecha.strip())
     if len(partes) >= 3:
         dia_txt = partes[0].zfill(2)
@@ -378,7 +372,6 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
     else:
         dia_txt, mes_txt, anio_txt = "", "", ""
 
-    # Fuente en negrita y tamaño aumentado para un texto bien grueso y legible
     fontname = "hebo"          # Helvetica-Bold
     fontsize = 0.50 * CM_TO_PT  # ~14.1pt
 
@@ -399,14 +392,14 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
         pt_vista = fitz.Point(x_vista, y_vista)
         pt_nativo = pt_vista * pagina.derotation_matrix
 
-        # Doble pase con microrrefinamiento de trazo para engrosar la tipografía
+        # Doble trazo reforzado para mayor grosor
         pagina.insert_text(pt_nativo, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
         pt_nativo_offset = fitz.Point(pt_nativo.x + 0.3, pt_nativo.y)
         pagina.insert_text(pt_nativo_offset, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
 
     return True, None
 
-def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
+def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha, paso=10):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_pdf.write(pdf_bytes)
         path_pdf = tmp_pdf.name
@@ -439,7 +432,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
         for item_sello in lista_sellos_elegidos:
             x_px, y_px = buscar_posicion_espacio_libre(
-                imagen_gris, ancho_sello_px, alto_sello_px, sellos_puestos_hoja
+                imagen_gris, ancho_sello_px, alto_sello_px, sellos_puestos_hoja, paso=paso
             )
 
             x0_pt_view = x_px * 0.72
@@ -496,12 +489,22 @@ st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
 st.caption("Procesamiento automático conservando la plantilla Excel exacta")
 
 # Sidebar
+st.sidebar.header("⚙️ Ajustes de Búsqueda")
+paso_evaluacion = st.sidebar.slider(
+    "🎯 Precisión de Escaneo (Paso en px):",
+    min_value=5,
+    max_value=30,
+    value=10,
+    step=5,
+    help="Valores menores (ej. 5 o 10 px) ajustan el sello con precisión milimétrica sobre reglas o cajetines."
+)
+
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
-    nuevo_nombre = st.text_input("Nombre de la firma/sello:")
-    archivo_nuevo = st.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
+    nuevo_nombre = st.sidebar.text_input("Nombre de la firma/sello:")
+    archivo_nuevo = st.sidebar.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
     
-    if st.button("💾 Guardar Sello"):
+    if st.sidebar.button("💾 Guardar Sello"):
         if nuevo_nombre.strip() and archivo_nuevo:
             ext = archivo_nuevo.name.split(".")[-1]
             ruta_dest = os.path.join(CARPETA_SELLOS, f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}")
@@ -541,12 +544,13 @@ st.divider()
 
 if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
     if st.button("🚀 Estampar PDF y Generar Todo", use_container_width=True):
-        with st.spinner("Procesando planos, rellenando Excel y exportando PDFs..."):
+        with st.spinner(f"Procesando planos con paso de {paso_evaluacion}px, rellenando Excel y exportando PDFs..."):
             pdf_res, resumen, alertas_sellos = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
                 libreria_archivos, 
-                texto_fecha
+                texto_fecha,
+                paso=paso_evaluacion
             )
             
             rev_tag = "REV"
