@@ -26,7 +26,8 @@ ALTO_SELLO_CM = 2.6   # 2.6 cm exactos en papel
 CARPETA_SELLOS = "firmas_sellos"
 PLANTILLA_EXCEL = "PLANTILLA_GR.xlsx"
 
-os.makedirs(CARPETA_SELLOS, exist_ok=True)
+if not os.path.exists(CARPETA_SELLOS):
+    os.makedirs(CARPETA_SELLOS)
 
 def obtener_libreria_sellos():
     extensiones = ('*.png', '*.jpg', '*.jpeg', '*.PNG', '*.JPG')
@@ -320,13 +321,56 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- SELLO VECTORIAL OPTIMIZADO (7.1 cm x 2.6 cm) ---
+# --- SELLO CON IMAGEN REAL PNG (`cc_sin_fondo.png`) Y FECHA DINÁMICA ---
+def agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fecha, rotacion):
+    # Buscar el archivo PNG en la raíz del proyecto o dentro de la carpeta de sellos
+    ruta_png = None
+    posibles_rutas = [
+        "cc_sin_fondo.png",
+        os.path.join(CARPETA_SELLOS, "cc_sin_fondo.png")
+    ]
+    
+    for r in posibles_rutas:
+        if os.path.exists(r):
+            ruta_png = r
+            break
+
+    if ruta_png:
+        # 1. Insertar la imagen PNG redimensionada exactamente a 7.1cm x 2.6cm
+        pagina.insert_image(rect_nativo, filename=ruta_png, rotate=rotacion)
+
+        # 2. Estampar la fecha dinámica en la parte inferior
+        color_rojo = (0.85, 0.0, 0.0)
+        texto = f"FECHA: {texto_fecha}"
+        fontname = "helv"
+        fontsize = 0.41 * CM_TO_PT # ~11.5 pt
+
+        ancho_box = view_rect.width
+        ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+
+        max_ancho = ancho_box * 0.92
+        if ancho_txt > max_ancho:
+            fontsize = fontsize * (max_ancho / ancho_txt)
+            ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+
+        x_vista = view_rect.x0 + (ancho_box - ancho_txt) / 2.0
+        y_vista = view_rect.y0 + (view_rect.height * 0.85)  # Ubicación de la fecha
+
+        pt_vista = fitz.Point(x_vista, y_vista)
+        pt_nativo = pt_vista * pagina.derotation_matrix
+
+        pagina.insert_text(pt_nativo, texto, fontsize=fontsize, fontname=fontname, color=color_rojo, rotate=rotacion)
+    else:
+        # Fallback por si la imagen PNG aún no se ha subido
+        agregar_sello_vectorial(pagina, view_rect, rect_nativo, "CC - Copia Controlada (Rojo)", texto_fecha, rotacion)
+
+# --- SELLO VECTORIAL RESPALDO O COPIA INFORMATIVA ---
 def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fecha, rotacion):
     if "CC" in tipo_sello:
-        color = (0.85, 0.0, 0.0)  # Rojo vivo del sello
+        color = (0.85, 0.0, 0.0)
         linea_2 = "COPIA CONTROLADA"
     else:
-        color = (0.0, 0.25, 0.75) # Azul
+        color = (0.0, 0.25, 0.75)
         linea_2 = "COPIA INFORMATIVA"
 
     shape = pagina.new_shape()
@@ -407,7 +451,9 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             view_rect = fitz.Rect(x0_pt_view, y0_pt_view, x0_pt_view + ancho_sello_pt, y0_pt_view + alto_sello_pt)
             rect_nativo = view_rect * pagina.derotation_matrix
 
-            if item_sello in ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"]:
+            if item_sello == "CC - Copia Controlada (Rojo)":
+                agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fecha, rot)
+            elif item_sello == "CI - Copia Informativa (Azul)":
                 agregar_sello_vectorial(pagina, view_rect, rect_nativo, item_sello, texto_fecha, rot)
             else:
                 ruta_img = libreria_archivos[item_sello]
@@ -431,27 +477,20 @@ st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon=
 st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
 st.caption("Procesamiento automático conservando la plantilla Excel exacta")
 
-# Sidebar - Cargar Nuevas Firmas
+# Sidebar
 st.sidebar.header("📁 Cargar Nuevas Firmas")
 with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
-    with st.sidebar.form("form_subir_sello", clear_on_submit=True):
-        nuevo_nombre = st.text_input("Nombre de la firma/sello:")
-        archivo_nuevo = st.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
-        btn_guardar = st.form_submit_button("💾 Guardar Sello", use_container_width=True)
-
-        if btn_guardar:
-            if nuevo_nombre.strip() and archivo_nuevo is not None:
-                ext = archivo_nuevo.name.split(".")[-1].lower()
-                nombre_limpio = re.sub(r'[^a-zA-Z0-9_]', '_', nuevo_nombre.lower().strip())
-                ruta_dest = os.path.join(CARPETA_SELLOS, f"{nombre_limpio}.{ext}")
-                
-                with open(ruta_dest, "wb") as f:
-                    f.write(archivo_nuevo.getvalue())
-                
-                st.success(f"¡Sello '{nuevo_nombre}' guardado exitosamente!")
-                st.rerun()
-            else:
-                st.warning("⚠️ Ingresa un nombre y selecciona una imagen antes de guardar.")
+    nuevo_nombre = st.text_input("Nombre de la firma/sello:")
+    archivo_nuevo = st.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
+    
+    if st.button("💾 Guardar Sello"):
+        if nuevo_nombre.strip() and archivo_nuevo:
+            ext = archivo_nuevo.name.split(".")[-1]
+            ruta_dest = os.path.join(CARPETA_SELLOS, f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}")
+            with open(ruta_dest, "wb") as f:
+                f.write(archivo_nuevo.read())
+            st.sidebar.success("¡Sello Guardado!")
+            st.rerun()
 
 col1, col2, col3 = st.columns([1.2, 1, 1])
 
