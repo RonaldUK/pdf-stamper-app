@@ -338,12 +338,12 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- SELLO CON IMAGEN REAL PNG (`cc_sin_fondo.png`) Y FECHA EMPATADA ---
-def agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fecha, rotacion):
+# --- SELLO CON IMAGEN REAL PNG DINÁMICA (CC / CI) CON FECHA EMPATADA ---
+def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color_rgb, texto_fecha, rotacion, tipo_fallback):
     ruta_png = None
     posibles_rutas = [
-        "cc_sin_fondo.png",
-        os.path.join(CARPETA_SELLOS, "cc_sin_fondo.png")
+        nombre_png,
+        os.path.join(CARPETA_SELLOS, nombre_png)
     ]
     
     for r in posibles_rutas:
@@ -364,17 +364,17 @@ def agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fec
         else:
             dia_txt, mes_txt, anio_txt = "", "", ""
 
-        color_rojo = (0.80, 0.0, 0.0)
-        fontname = "hebo"          # Helvetica-Bold para empatar perfectamente la tipografía del sello
-        fontsize = 0.38 * CM_TO_PT  # ~10.8 pt (mismo tamaño visual que el texto impreso)
+        # Tamaño más grande (~12.8pt) y fuente Helvetica-Bold para un look alargado/Arial Narrow
+        fontname = "hebo"          
+        fontsize = 0.45 * CM_TO_PT  
 
-        y_vista = view_rect.y0 + (view_rect.height * 0.84)
+        # Posición vertical más elevada (0.81) para que los números descansen exactos sobre los puntos
+        y_vista = view_rect.y0 + (view_rect.height * 0.81)
 
-        # Posiciones horizontales relativas para cada campo: [Día, Mes, Año]
         posiciones = [
-            (dia_txt, 0.39),   # Día (centrado sobre la línea punteada entre FECHA: y /)
-            (mes_txt, 0.63),   # Mes (centrado sobre la línea punteada entre / y /20)
-            (anio_txt, 0.90)   # Año (centrado sobre la línea punteada después de /20)
+            (dia_txt, 0.38),   # Día sobre la primera línea punteada
+            (mes_txt, 0.62),   # Mes sobre la segunda línea punteada
+            (anio_txt, 0.89)   # Año sobre la tercera línea punteada después de /20
         ]
 
         for txt, rel_x in posiciones:
@@ -386,15 +386,15 @@ def agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fec
             pt_vista = fitz.Point(x_vista, y_vista)
             pt_nativo = pt_vista * pagina.derotation_matrix
 
-            pagina.insert_text(pt_nativo, txt, fontsize=fontsize, fontname=fontname, color=color_rojo, rotate=rotacion)
+            pagina.insert_text(pt_nativo, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
     else:
-        # Fallback por si la imagen PNG aún no está disponible
-        agregar_sello_vectorial(pagina, view_rect, rect_nativo, "CC - Copia Controlada (Rojo)", texto_fecha, rotacion)
+        # Fallback por si la imagen PNG no existe en la carpeta
+        agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_fallback, texto_fecha, rotacion)
 
 # --- SELLO VECTORIAL RESPALDO O COPIA INFORMATIVA ---
 def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fecha, rotacion):
     if "CC" in tipo_sello:
-        color = (0.85, 0.0, 0.0)
+        color = (0.80, 0.0, 0.0)
         linea_2 = "COPIA CONTROLADA"
     else:
         color = (0.0, 0.25, 0.75)
@@ -479,9 +479,17 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             rect_nativo = view_rect * pagina.derotation_matrix
 
             if item_sello == "CC - Copia Controlada (Rojo)":
-                agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fecha, rot)
+                agregar_sello_png_dinamico(
+                    pagina, view_rect, rect_nativo, 
+                    "cc_sin_fondo.png", (0.80, 0.0, 0.0), 
+                    texto_fecha, rot, item_sello
+                )
             elif item_sello == "CI - Copia Informativa (Azul)":
-                agregar_sello_vectorial(pagina, view_rect, rect_nativo, item_sello, texto_fecha, rot)
+                agregar_sello_png_dinamico(
+                    pagina, view_rect, rect_nativo, 
+                    "ci_sin_fondo.png", (0.0, 0.20, 0.65), 
+                    texto_fecha, rot, item_sello
+                )
             else:
                 ruta_img = libreria_archivos[item_sello]
                 pagina.insert_image(rect_nativo, filename=ruta_img, rotate=rot)
