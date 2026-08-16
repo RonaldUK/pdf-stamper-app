@@ -187,64 +187,131 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- EXTRAER DATOS DEL CAJETÍN (INVARIANTE A LA ROTACIÓN) ---
-def extraer_datos_inteligentes_cajetin(pagina):
+# --- FUNCIONES DE LIMPIEZA Y DETECCIÓN AISLADAS ---
+
+def limpiar_texto_comillas(texto):
+    if not texto:
+        return ""
+    texto_limpio = re.sub(r'["“"”\']', '', texto).strip()
+    texto_limpio = re.sub(r'^\s*[\-\–\—\:]+\s*', '', texto_limpio)
+    return texto_limpio.strip()
+
+def extraer_codigo_plano(pagina):
     mat_view = pagina.rotation_matrix
     view_rect = pagina.rect * mat_view
     v_width = view_rect.width
     v_height = view_rect.height
 
     words = pagina.get_text("words")
-
     words_cajetin = []
     for w in words:
         r_nat = fitz.Rect(w[0], w[1], w[2], w[3])
         r_view = r_nat * mat_view
-        
         if r_view.x0 >= v_width * 0.45 and r_view.y0 >= v_height * 0.50:
-            words_cajetin.append({
-                "text": w[4],
-                "x0": r_view.x0,
-                "y0": r_view.y0,
-                "x1": r_view.x1,
-                "y1": r_view.y1
-            })
+            words_cajetin.append(w[4])
 
-    codigo_plano = "No detectado"
-    texto_roi = " ".join([w["text"] for w in words_cajetin])
+    texto_roi = " ".join(words_cajetin)
     match_cod = re.search(r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b', texto_roi)
     if match_cod:
-        codigo_plano = match_cod.group(0)
+        return match_cod.group(0)
 
-    lineas_dict = {}
-    for w in words_cajetin:
-        y_key = round(w["y0"] / 5) * 5
-        if y_key not in lineas_dict:
-            lineas_dict[y_key] = []
-        lineas_dict[y_key].append(w)
+    # Fallback con texto completo de la página
+    texto_completo = pagina.get_text("text")
+    patrones_codigo = [
+        r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b',
+        r'\b\d+-[A-Z0-9]+-[0-9-]+(?:-R\d+|-REV\d+)?\b'
+    ]
+    for pat in patrones_codigo:
+        matches = re.findall(pat, texto_completo)
+        if matches:
+            falsos_positivos = ["ESCALA", "FECHA", "PROYECTO", "TUBOS", "INDICADA", "DIBUJO", "PLANO", "REVISION"]
+            candidatos = [m.strip() for m in matches if not any(fp in m.upper() for fp in falsos_positivos) and len(m.strip()) > 6]
+            if candidatos:
+                return candidatos[0]
 
-    lineas_validas = []
-    palabras_descarte = ["PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", "INDICADA", "2026", "JUNIO", "MTC"]
+    return "No detectado"
 
-    for y_key in sorted(lineas_dict.keys()):
-        linea_words = sorted(lineas_dict[y_key], key=lambda w: w["x0"])
-        texto_linea = " ".join([w["text"] for w in linea_words]).strip()
-        
-        if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', texto_linea):
-            continue
-            
-        linea_up = texto_linea.upper()
-        if any(p in linea_up for p in palabras_descarte) or (codigo_plano != "No detectado" and codigo_plano in texto_linea):
-            continue
+def extraer_descripcion_plano(pagina, codigo_plano="No detectado"):
+    rot = pagina.rotation
+    rect_pag = pagina.rect
+    if rot in [90, 270]:
+        ancho_v, alto_v = rect_pag.height, rect_pag.width
+    else:
+        ancho_v, alto_v = rect_pag.width, rect_pag.height
 
-        linea_limpia = re.sub(r'["“"”]', '', texto_linea).strip()
-        linea_limpia = re.sub(r'^\s*[\-\–\—\:]+\s*', '', linea_limpia)
+    words = pagina.get_text("words")
+    mat_directa = pagina.rotation_matrix
 
-        if linea_limpia and len(linea_limpia) > 3:
-            lineas_validas.append(linea_limpia)
+    rect_proyecto_vista = None
+    for w in words:
+        texto_word = w[4].upper().strip()
+        if "PROYECTO" in texto_word:
+            r_nativo = fitz.Rect(w[0], w[1], w[2], w[3])
+            r_vista = r_nativo * mat_directa
+            if r_vista.y0 > (alto_v * 0.50):
+                rect_proyecto_vista = r_vista
+                break
 
-    titulo_plano = " - ".join(lineas_validas) if lineas_validas else "No detectado"
+    titulo_plano = "No detectado"
 
+    if rect_proyecto_vista:
+        view_box_desc = fitz.Rect(
+            rect_proyecto_vista.x0 - 40,
+            rect_proyecto_vista.y1 + 2,
+            rect_proyecto_vista.x0 + 380,
+            rect_proyecto_vista.y1 + 110
+        )
+        mat_inversa = pagina.derotation_matrix
+        nat_box_desc = view_box_desc * mat_inversa
+
+        texto_celda = pagina.get_text("text", clip=nat_box_desc).strip()
+        lineas = [l.strip() for l in texto_celda.split('\n') if l.strip()]
+
+        lineas_limpias = []
+        for l in lineas:
+            l_limp = limpiar_texto_comillas(l)
+            l_up = l_limp.upper()
+            palabras_descarte = [
+                "ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "CÓDIGO", 
+                "500M", "100M", "200M", "300M", "400M", "ESCALA GRAFICA", "REVISION"
+            ]
+            if l_limp and not any(k in l_up for k in palabras_descarte) and l_limp != codigo_plano:
+                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l_limp) and len(l_limp) > 3:
+                    lineas_limpias.append(l_limp)
+
+        if lineas_limpias:
+            titulo_plano = " - ".join(lineas_limpias[:3])
+
+    if titulo_plano == "No detectado":
+        view_roi_cajetin = fitz.Rect(ancho_v * 0.55, alto_v * 0.70, ancho_v, alto_v)
+        nat_roi_cajetin = view_roi_cajetin * pagina.derotation_matrix
+
+        texto_roi = pagina.get_text("text", clip=nat_roi_cajetin)
+        lineas_fallback = [l.strip() for l in texto_roi.split('\n') if len(l.strip()) > 3]
+
+        lineas_validas = []
+        for l in lineas_fallback:
+            l_limp = limpiar_texto_comillas(l)
+            l_up = l_limp.upper()
+            palabras_descarte = [
+                "ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "MTC", 
+                "MINISTERIO", "INTERSUR", "ESCALA GRAFICA", "500M", "400M", "300M", "200M", "100M"
+            ]
+            if l_limp and not any(k in l_up for k in palabras_descarte) and l_limp != codigo_plano:
+                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l_limp) and len(l_limp) > 3:
+                    lineas_validas.append(l_limp)
+
+        if lineas_validas:
+            titulo_plano = " - ".join(lineas_validas[:3])
+
+    if titulo_plano != "No detectado":
+        titulo_plano = limpiar_texto_comillas(titulo_plano)
+
+    return titulo_plano
+
+def extraer_datos_inteligentes_cajetin(pagina):
+    codigo_plano = extraer_codigo_plano(pagina)
+    titulo_plano = extraer_descripcion_plano(pagina, codigo_plano)
     return codigo_plano, titulo_plano
 
 def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos, paso=10):
