@@ -187,7 +187,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- EXTRAER DATOS DEL CAJETÍN (INVARIANTE A LA ROTACIÓN) ---
+# --- EXTRAER DATOS DEL CAJETÍN (ESTRICTO 1/4 X 1/4 INFERIOR DERECHO) ---
 def extraer_datos_inteligentes_cajetin(pagina):
     mat_view = pagina.rotation_matrix
     view_rect = pagina.rect * mat_view
@@ -196,12 +196,13 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
     words = pagina.get_text("words")
 
+    # 1. ROI súper restringida: Exactamente 1/4 x 1/4 inferior derecho (X >= 70%, Y >= 75%)
     words_cajetin = []
     for w in words:
         r_nat = fitz.Rect(w[0], w[1], w[2], w[3])
         r_view = r_nat * mat_view
         
-        if r_view.x0 >= v_width * 0.45 and r_view.y0 >= v_height * 0.50:
+        if r_view.x0 >= (v_width * 0.70) and r_view.y0 >= (v_height * 0.75):
             words_cajetin.append({
                 "text": w[4],
                 "x0": r_view.x0,
@@ -210,31 +211,71 @@ def extraer_datos_inteligentes_cajetin(pagina):
                 "y1": r_view.y1
             })
 
+    # --- EXTRACCIÓN DE CÓDIGO (MANTENIDA EXACTA) ---
     codigo_plano = "No detectado"
     texto_roi = " ".join([w["text"] for w in words_cajetin])
     match_cod = re.search(r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b', texto_roi)
     if match_cod:
         codigo_plano = match_cod.group(0)
 
-    lineas_dict = {}
+    # --- EXTRACCIÓN ESTRICTA DE DESCRIPCIÓN (SOLO CELDA DE PROYECTO) ---
+    rect_proyecto = None
     for w in words_cajetin:
-        y_key = round(w["y0"] / 5) * 5
+        if "PROYECTO" in w["text"].upper():
+            rect_proyecto = w
+            break
+
+    if rect_proyecto:
+        # Delimitar caja visual exacta debajo del rótulo PROYECTO:
+        y_top_desc = rect_proyecto["y1"] - 2
+        y_bot_desc = rect_proyecto["y1"] + 90
+        x_min_desc = rect_proyecto["x0"] - 10
+        x_max_desc = rect_proyecto["x0"] + 320
+
+        words_desc = [
+            w for w in words_cajetin
+            if (x_min_desc <= w["x0"] <= x_max_desc) and (y_top_desc <= w["y0"] <= y_bot_desc)
+        ]
+    else:
+        words_desc = words_cajetin
+
+    # Agrupar palabras por líneas físicas dentro de la celda
+    lineas_dict = {}
+    for w in words_desc:
+        y_key = round(w["y0"] / 6) * 6
         if y_key not in lineas_dict:
             lineas_dict[y_key] = []
         lineas_dict[y_key].append(w)
 
     lineas_validas = []
-    palabras_descarte = ["PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", "INDICADA", "2026", "JUNIO", "MTC"]
+    palabras_prohibidas = [
+        "PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", "INDICADA", 
+        "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE",
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "MTC", "INTERSUR", "OSITRAN",
+        "CUADRO", "COORDENADAS", "PUNTO", "ESTE", "NORTE", "P.M.", "F'C=", "C.F:", "KG/CM2"
+    ]
 
     for y_key in sorted(lineas_dict.keys()):
         linea_words = sorted(lineas_dict[y_key], key=lambda w: w["x0"])
         texto_linea = " ".join([w["text"] for w in linea_words]).strip()
         
-        if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', texto_linea):
+        # Descartar textos entre comillas exactas como "ME - N° 154"
+        if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', texto_linea) or re.match(r'^\s*"?ME\s*-\s*N°?\s*\d+"?\s*$', texto_linea, re.IGNORECASE):
             continue
-            
+
+        # Descartar fechas
+        if re.search(r'\b20\d{2}\b', texto_linea) and len(texto_linea) < 15:
+            continue
+
         linea_up = texto_linea.upper()
-        if any(p in linea_up for p in palabras_descarte) or (codigo_plano != "No detectado" and codigo_plano in texto_linea):
+        if any(p in linea_up for p in palabras_prohibidas):
+            continue
+        
+        if codigo_plano != "No detectado" and codigo_plano in texto_linea:
+            continue
+
+        # Descartar secuencias numéricas de coordenadas (ej: 339683.913 o 8457162.013)
+        if re.search(r'\d{5,}\.\d+', texto_linea):
             continue
 
         linea_limpia = re.sub(r'["“"”]', '', texto_linea).strip()
