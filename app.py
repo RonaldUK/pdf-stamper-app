@@ -72,7 +72,6 @@ def calcular_siguiente_correlativo(secuencia_base, offset):
         return nuevo_num, resto
     return secuencia_base, ""
 
-# --- LÍNEA DIAGONAL DE CIERRE EN EXCEL ---
 def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
     if fila_inicio_linea >= fila_fin_linea:
         return
@@ -87,7 +86,6 @@ def agregar_linea_diagonal_excel(ws, fila_inicio_linea, fila_fin_linea=44):
     except Exception:
         pass
 
-# --- EXPORTAR HOJA EXCEL A PDF ---
 def convertir_excel_a_pdf(excel_bytes):
     tmp_excel_path = None
     expected_pdf_path = None
@@ -132,7 +130,6 @@ def unificar_pdfs(lista_pdf_bytes):
     buffer.seek(0)
     return buffer.getvalue()
 
-# --- GENERADOR SOBRE LA HOJA OSP DE LA PLANTILLA ---
 def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, offset_correlativo, plantilla_path=PLANTILLA_EXCEL):
     if not os.path.exists(plantilla_path):
         st.error(f"⚠️ No se encontró la plantilla `{plantilla_path}` en la carpeta del proyecto.")
@@ -190,129 +187,66 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- DETECCIÓN DIRECTA Y FOCALIZADA EN EL RÓTULO DEL CAJETÍN ---
+# --- EXTRAER DATOS DEL CAJETÍN (INVARIANTE A LA ROTACIÓN) ---
 def extraer_datos_inteligentes_cajetin(pagina):
-    rot = pagina.rotation
-    rect_pag = pagina.rect
-    
-    if rot in [90, 270]:
-        ancho_v, alto_v = rect_pag.height, rect_pag.width
-    else:
-        ancho_v, alto_v = rect_pag.width, rect_pag.height
+    mat_view = pagina.rotation_matrix
+    view_rect = pagina.rect * mat_view
+    v_width = view_rect.width
+    v_height = view_rect.height
 
-    mat_directa = pagina.rotation_matrix
-    mat_inversa = pagina.derotation_matrix
+    words = pagina.get_text("words")
 
-    # Definimos la ROI del Rótulo (esquina inferior derecha: 40% ancho x 20% alto)
-    view_roi_rotulo = fitz.Rect(ancho_v * 0.60, alto_v * 0.80, ancho_v, alto_v)
-    nat_roi_rotulo = view_roi_rotulo * mat_inversa
+    words_cajetin = []
+    for w in words:
+        r_nat = fitz.Rect(w[0], w[1], w[2], w[3])
+        r_view = r_nat * mat_view
+        
+        if r_view.x0 >= v_width * 0.45 and r_view.y0 >= v_height * 0.50:
+            words_cajetin.append({
+                "text": w[4],
+                "x0": r_view.x0,
+                "y0": r_view.y0,
+                "x1": r_view.x1,
+                "y1": r_view.y1
+            })
 
-    words = pagina.get_text("words", clip=nat_roi_rotulo)
-
-    # 1. CAPTURA DIRECTA DEL CÓDIGO
     codigo_plano = "No detectado"
-    rect_codigo_label = None
+    texto_roi = " ".join([w["text"] for w in words_cajetin])
+    match_cod = re.search(r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b', texto_roi)
+    if match_cod:
+        codigo_plano = match_cod.group(0)
 
-    for w in words:
-        texto_w = w[4].upper().strip()
-        if "CODIGO" in texto_w or "CÓDIGO" in texto_w:
-            r_nativo = fitz.Rect(w[0], w[1], w[2], w[3])
-            rect_codigo_label = r_nativo * mat_directa
-            break
+    lineas_dict = {}
+    for w in words_cajetin:
+        y_key = round(w["y0"] / 5) * 5
+        if y_key not in lineas_dict:
+            lineas_dict[y_key] = []
+        lineas_dict[y_key].append(w)
 
-    if rect_codigo_label:
-        # Bounding box del recuadro del código (a la derecha y dentro de la celda de CODIGO)
-        view_box_codigo = fitz.Rect(
-            rect_codigo_label.x0,
-            rect_codigo_label.y0 - 2,
-            rect_codigo_label.x0 + 300,
-            rect_codigo_label.y1 + 25
-        )
-        texto_cod_celda = pagina.get_text("text", clip=view_box_codigo * mat_inversa).strip()
+    lineas_validas = []
+    palabras_descarte = ["PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", "INDICADA", "2026", "JUNIO", "MTC"]
+
+    for y_key in sorted(lineas_dict.keys()):
+        linea_words = sorted(lineas_dict[y_key], key=lambda w: w["x0"])
+        texto_linea = " ".join([w["text"] for w in linea_words]).strip()
         
-        # Extraer el valor ignorando la etiqueta "CODIGO:"
-        match_cod = re.search(r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b', texto_cod_celda)
-        if match_cod:
-            codigo_plano = match_cod.group(0)
-        else:
-            txt_limpio = re.sub(r'(?i)CODIGO\s*:\s*', '', texto_cod_celda).strip()
-            if txt_limpio:
-                codigo_plano = txt_limpio.split('\n')[0].strip()
-
-    # Fallback para el código dentro de la ROI
-    if codigo_plano == "No detectado":
-        texto_roi_completo = pagina.get_text("text", clip=nat_roi_rotulo)
-        match_fall = re.search(r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b', texto_roi_completo)
-        if match_fall:
-            codigo_plano = match_fall.group(0)
-
-    # 2. CAPTURA DIRECTA DE LA DESCRIPCIÓN / TÍTULO
-    titulo_plano = "No detectado"
-    rect_proyecto_label = None
-
-    for w in words:
-        texto_w = w[4].upper().strip()
-        if "PROYECTO" in texto_w:
-            r_nativo = fitz.Rect(w[0], w[1], w[2], w[3])
-            rect_proyecto_label = r_nativo * mat_directa
-            break
-
-    if rect_proyecto_label:
-        # Bounding box centrado en la celda del título (a la izquierda del recuadro de código/escala)
-        view_box_desc = fitz.Rect(
-            rect_proyecto_label.x0 - 5,
-            rect_proyecto_label.y1 + 2,
-            rect_proyecto_label.x0 + 380,
-            rect_proyecto_label.y1 + 100
-        )
-        texto_desc_celda = pagina.get_text("text", clip=view_box_desc * mat_inversa)
-        lineas_raw = [l.strip() for l in texto_desc_celda.split('\n') if l.strip()]
-
-        lineas_validas = []
-        for line in lineas_raw:
-            # Descartar frases entre comillas completas (ej. '"ME - N° 154"')
-            if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', line):
-                continue
-
-            line_up = line.upper()
-            palabras_filtro = ["PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", "INDICADA"]
-            if any(p in line_up for p in palabras_filtro) or line == codigo_plano:
-                continue
-
-            # Limpiar comillas residuales y guiones extremos
-            line_limpia = re.sub(r'["“"”]', '', line).strip()
-            line_limpia = re.sub(r'^\s*[\-\–\—\:]+\s*', '', line_limpia)
+        if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', texto_linea):
+            continue
             
-            if line_limpia and len(line_limpia) > 2:
-                lineas_validas.append(line_limpia)
+        linea_up = texto_linea.upper()
+        if any(p in linea_up for p in palabras_descarte) or (codigo_plano != "No detectado" and codigo_plano in texto_linea):
+            continue
 
-        if lineas_validas:
-            titulo_plano = " - ".join(lineas_validas)
+        linea_limpia = re.sub(r'["“"”]', '', texto_linea).strip()
+        linea_limpia = re.sub(r'^\s*[\-\–\—\:]+\s*', '', linea_limpia)
 
-    # Fallback para el título dentro de la ROI
-    if titulo_plano == "No detectado":
-        texto_roi_completo = pagina.get_text("text", clip=nat_roi_rotulo)
-        lineas_fall = [l.strip() for l in texto_roi_completo.split('\n') if l.strip()]
-        
-        lineas_validas = []
-        for line in lineas_fall:
-            if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', line):
-                continue
-            line_up = line.upper()
-            if any(p in line_up for p in ["PROYECTO", "ESCALA", "FECHA", "CODIGO", "INDICADA", "2026", "JUNIO", "MTC"]):
-                continue
-            if line == codigo_plano:
-                continue
-            line_limpia = re.sub(r'["“"”]', '', line).strip()
-            if line_limpia and len(line_limpia) > 3:
-                lineas_validas.append(line_limpia)
+        if linea_limpia and len(linea_limpia) > 3:
+            lineas_validas.append(linea_limpia)
 
-        if lineas_validas:
-            titulo_plano = " - ".join(lineas_validas[:2])
+    titulo_plano = " - ".join(lineas_validas) if lineas_validas else "No detectado"
 
     return codigo_plano, titulo_plano
 
-# --- ALGORITMO DE BÚSQUEDA Y PUNTUACIÓN DE ESPACIO LIBRE (CON PASO CONFIGURABLE) ---
 def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos, paso=10):
     _, binaria = cv2.threshold(imagen_gris, 230, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
@@ -355,7 +289,6 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
 
     return mejor_x, mejor_y
 
-# --- ESTAMPADO DE SELLO DINÁMICO DESDE PNG (CC / CI) ---
 def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color_rgb, texto_fecha, rotacion):
     ruta_png = None
     posibles_rutas = [
@@ -381,15 +314,15 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
     else:
         dia_txt, mes_txt, anio_txt = "", "", ""
 
-    fontname = "hebo"          # Helvetica-Bold
-    fontsize = 0.50 * CM_TO_PT  # ~14.1pt
+    fontname = "hebo"
+    fontsize = 0.50 * CM_TO_PT
 
     y_vista = view_rect.y0 + (view_rect.height * 0.81)
 
     posiciones = [
-        (dia_txt, 0.38),   # Día
-        (mes_txt, 0.62),   # Mes
-        (anio_txt, 0.89)   # Año
+        (dia_txt, 0.38),
+        (mes_txt, 0.62),
+        (anio_txt, 0.89)
     ]
 
     for txt, rel_x in posiciones:
@@ -401,7 +334,6 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
         pt_vista = fitz.Point(x_vista, y_vista)
         pt_nativo = pt_vista * pagina.derotation_matrix
 
-        # Doble trazo reforzado para mayor grosor
         pagina.insert_text(pt_nativo, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
         pt_nativo_offset = fitz.Point(pt_nativo.x + 0.3, pt_nativo.y)
         pagina.insert_text(pt_nativo_offset, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
@@ -497,7 +429,6 @@ st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon=
 st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
 st.caption("Procesamiento automático conservando la plantilla Excel exacta")
 
-# Sidebar
 st.sidebar.header("⚙️ Ajustes de Búsqueda")
 paso_evaluacion = st.sidebar.slider(
     "🎯 Precisión de Escaneo (Paso en px):",
