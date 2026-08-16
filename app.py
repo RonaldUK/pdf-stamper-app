@@ -16,7 +16,6 @@ from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 from openpyxl.drawing.graphic import GroupShape
 
 # --- CONFIGURACIÓN DE MEDIDAS EXACTAS EN PAPEL (CENTÍMETROS REALES) ---
-# En especificación PDF: 1 pulgada = 2.54 cm = 72 pt -> 1 cm = 28.34645669 pt
 CM_TO_PT = 28.34645669
 
 ANCHO_SELLO_CM = 7.1  # 7.1 cm exactos en papel
@@ -191,6 +190,19 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
+# --- LIMPIEZA DE FRASES ENTRE COMILLAS EN TÍTULO ---
+def limpiar_texto_comillas(texto):
+    if not texto:
+        return ""
+    # Elimina cualquier texto encerrado en comillas dobles, simples o tipográficas (ej: "ME - 154 KM 200+300")
+    t_sin = re.sub(r'["“"”\'].*?["“"”\']', '', texto)
+    t_sin = re.sub(r'["“"”]', '', t_sin)
+    # Limpia guiones sobrantes al inicio, final o repetidos
+    t_limpio = re.sub(r'^\s*[\-\–\—\:]+\s*', '', t_sin)
+    t_limpio = re.sub(r'\s*[\-\–\—\:]+\s*$', '', t_limpio)
+    t_limpio = re.sub(r'\s*[\-\–\—\:]\s*[\-\–\—\:]+\s*', ' - ', t_limpio)
+    return re.sub(r'\s+', ' ', t_limpio).strip()
+
 # --- DETECCIÓN DE CÓDIGO Y TÍTULO ---
 def extraer_datos_inteligentes_cajetin(pagina):
     rot = pagina.rotation
@@ -247,14 +259,15 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
         lineas_limpias = []
         for l in lineas:
-            l_up = l.upper()
+            l_limp = limpiar_texto_comillas(l)
+            l_up = l_limp.upper()
             palabras_descarte = [
                 "ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "CÓDIGO", 
                 "500M", "100M", "200M", "300M", "400M", "ESCALA GRAFICA", "REVISION"
             ]
-            if not any(k in l_up for k in palabras_descarte) and l != codigo_plano:
-                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l) and len(l) > 3:
-                    lineas_limpias.append(l)
+            if l_limp and not any(k in l_up for k in palabras_descarte) and l_limp != codigo_plano:
+                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l_limp) and len(l_limp) > 3:
+                    lineas_limpias.append(l_limp)
 
         if lineas_limpias:
             titulo_plano = " - ".join(lineas_limpias[:3])
@@ -268,17 +281,21 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
         lineas_validas = []
         for l in lineas_fallback:
-            l_up = l.upper()
+            l_limp = limpiar_texto_comillas(l)
+            l_up = l_limp.upper()
             palabras_descarte = [
                 "ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "MTC", 
                 "MINISTERIO", "INTERSUR", "ESCALA GRAFICA", "500M", "400M", "300M", "200M", "100M"
             ]
-            if not any(k in l_up for k in palabras_descarte) and l != codigo_plano:
-                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l):
-                    lineas_validas.append(l)
+            if l_limp and not any(k in l_up for k in palabras_descarte) and l_limp != codigo_plano:
+                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l_limp) and len(l_limp) > 3:
+                    lineas_validas.append(l_limp)
 
         if lineas_validas:
             titulo_plano = " - ".join(lineas_validas[:3])
+
+    if titulo_plano != "No detectado":
+        titulo_plano = limpiar_texto_comillas(titulo_plano)
 
     return codigo_plano, titulo_plano
 
@@ -321,9 +338,8 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos.sort(key=lambda item: item[0], reverse=True)
     return candidatos[0][1], candidatos[0][2]
 
-# --- SELLO CON IMAGEN REAL PNG (`cc_sin_fondo.png`) Y FECHA DINÁMICA ---
+# --- SELLO CON IMAGEN REAL PNG (`cc_sin_fondo.png`) Y FECHA EMPATADA ---
 def agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fecha, rotacion):
-    # Buscar el archivo PNG en la raíz del proyecto o dentro de la carpeta de sellos
     ruta_png = None
     posibles_rutas = [
         "cc_sin_fondo.png",
@@ -339,29 +355,40 @@ def agregar_sello_copia_controlada_png(pagina, view_rect, rect_nativo, texto_fec
         # 1. Insertar la imagen PNG redimensionada exactamente a 7.1cm x 2.6cm
         pagina.insert_image(rect_nativo, filename=ruta_png, rotate=rotacion)
 
-        # 2. Estampar la fecha dinámica en la parte inferior
-        color_rojo = (0.85, 0.0, 0.0)
-        texto = f"FECHA: {texto_fecha}"
-        fontname = "helv"
-        fontsize = 0.41 * CM_TO_PT # ~11.5 pt
+        # 2. Parsear día, mes y año de 2 dígitos (ej. 16/08/2026 -> 16, 08, 26)
+        partes = re.split(r'[/.-]', texto_fecha.strip())
+        if len(partes) >= 3:
+            dia_txt = partes[0].zfill(2)
+            mes_txt = partes[1].zfill(2)
+            anio_txt = partes[2][-2:].zfill(2)
+        else:
+            dia_txt, mes_txt, anio_txt = "", "", ""
 
-        ancho_box = view_rect.width
-        ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+        color_rojo = (0.80, 0.0, 0.0)
+        fontname = "hebo"          # Helvetica-Bold para empatar perfectamente la tipografía del sello
+        fontsize = 0.38 * CM_TO_PT  # ~10.8 pt (mismo tamaño visual que el texto impreso)
 
-        max_ancho = ancho_box * 0.92
-        if ancho_txt > max_ancho:
-            fontsize = fontsize * (max_ancho / ancho_txt)
-            ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
+        y_vista = view_rect.y0 + (view_rect.height * 0.84)
 
-        x_vista = view_rect.x0 + (ancho_box - ancho_txt) / 2.0
-        y_vista = view_rect.y0 + (view_rect.height * 0.85)  # Ubicación de la fecha
+        # Posiciones horizontales relativas para cada campo: [Día, Mes, Año]
+        posiciones = [
+            (dia_txt, 0.39),   # Día (centrado sobre la línea punteada entre FECHA: y /)
+            (mes_txt, 0.63),   # Mes (centrado sobre la línea punteada entre / y /20)
+            (anio_txt, 0.90)   # Año (centrado sobre la línea punteada después de /20)
+        ]
 
-        pt_vista = fitz.Point(x_vista, y_vista)
-        pt_nativo = pt_vista * pagina.derotation_matrix
+        for txt, rel_x in posiciones:
+            if not txt:
+                continue
+            ancho_txt = fitz.get_text_length(txt, fontname=fontname, fontsize=fontsize)
+            x_vista = view_rect.x0 + (view_rect.width * rel_x) - (ancho_txt / 2.0)
 
-        pagina.insert_text(pt_nativo, texto, fontsize=fontsize, fontname=fontname, color=color_rojo, rotate=rotacion)
+            pt_vista = fitz.Point(x_vista, y_vista)
+            pt_nativo = pt_vista * pagina.derotation_matrix
+
+            pagina.insert_text(pt_nativo, txt, fontsize=fontsize, fontname=fontname, color=color_rojo, rotate=rotacion)
     else:
-        # Fallback por si la imagen PNG aún no se ha subido
+        # Fallback por si la imagen PNG aún no está disponible
         agregar_sello_vectorial(pagina, view_rect, rect_nativo, "CC - Copia Controlada (Rojo)", texto_fecha, rotacion)
 
 # --- SELLO VECTORIAL RESPALDO O COPIA INFORMATIVA ---
