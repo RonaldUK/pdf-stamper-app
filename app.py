@@ -190,110 +190,125 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- LIMPIEZA DE FRASES ENTRE COMILLAS EN TÍTULO ---
-def limpiar_texto_comillas(texto):
-    if not texto:
-        return ""
-    t_sin = re.sub(r'["“"”\'].*?["“"”\']', '', texto)
-    t_sin = re.sub(r'["“"”]', '', t_sin)
-    t_limpio = re.sub(r'^\s*[\-\–\—\:]+\s*', '', t_sin)
-    t_limpio = re.sub(r'\s*[\-\–\—\:]+\s*$', '', t_limpio)
-    t_limpio = re.sub(r'\s*[\-\–\—\:]\s*[\-\–\—\:]+\s*', ' - ', t_limpio)
-    return re.sub(r'\s+', ' ', t_limpio).strip()
-
-# --- DETECCIÓN DE CÓDIGO Y TÍTULO ---
+# --- DETECCIÓN DIRECTA Y FOCALIZADA EN EL RÓTULO DEL CAJETÍN ---
 def extraer_datos_inteligentes_cajetin(pagina):
     rot = pagina.rotation
-    texto_completo = pagina.get_text("text")
-
-    patrones_codigo = [
-        r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b',
-        r'\b\d+-[A-Z0-9]+-[0-9-]+(?:-R\d+|-REV\d+)?\b'
-    ]
-
-    codigo_plano = "No detectado"
-    for pat in patrones_codigo:
-        matches = re.findall(pat, texto_completo)
-        if matches:
-            falsos_positivos = ["ESCALA", "FECHA", "PROYECTO", "TUBOS", "INDICADA", "DIBUJO", "PLANO", "REVISION"]
-            candidatos = [m.strip() for m in matches if not any(fp in m.upper() for fp in falsos_positivos) and len(m.strip()) > 6]
-            if candidatos:
-                codigo_plano = candidatos[0]
-                break
-
     rect_pag = pagina.rect
+    
     if rot in [90, 270]:
         ancho_v, alto_v = rect_pag.height, rect_pag.width
     else:
         ancho_v, alto_v = rect_pag.width, rect_pag.height
 
-    words = pagina.get_text("words")
     mat_directa = pagina.rotation_matrix
+    mat_inversa = pagina.derotation_matrix
 
-    rect_proyecto_vista = None
+    # Definimos la ROI del Rótulo (esquina inferior derecha: 40% ancho x 20% alto)
+    view_roi_rotulo = fitz.Rect(ancho_v * 0.60, alto_v * 0.80, ancho_v, alto_v)
+    nat_roi_rotulo = view_roi_rotulo * mat_inversa
+
+    words = pagina.get_text("words", clip=nat_roi_rotulo)
+
+    # 1. CAPTURA DIRECTA DEL CÓDIGO
+    codigo_plano = "No detectado"
+    rect_codigo_label = None
+
     for w in words:
-        texto_word = w[4].upper().strip()
-        if "PROYECTO" in texto_word:
+        texto_w = w[4].upper().strip()
+        if "CODIGO" in texto_w or "CÓDIGO" in texto_w:
             r_nativo = fitz.Rect(w[0], w[1], w[2], w[3])
-            r_vista = r_nativo * mat_directa
-            if r_vista.y0 > (alto_v * 0.50):
-                rect_proyecto_vista = r_vista
-                break
+            rect_codigo_label = r_nativo * mat_directa
+            break
 
-    titulo_plano = "No detectado"
-
-    if rect_proyecto_vista:
-        view_box_desc = fitz.Rect(
-            rect_proyecto_vista.x0 - 40,
-            rect_proyecto_vista.y1 + 2,
-            rect_proyecto_vista.x0 + 380,
-            rect_proyecto_vista.y1 + 110
+    if rect_codigo_label:
+        # Bounding box del recuadro del código (a la derecha y dentro de la celda de CODIGO)
+        view_box_codigo = fitz.Rect(
+            rect_codigo_label.x0,
+            rect_codigo_label.y0 - 2,
+            rect_codigo_label.x0 + 300,
+            rect_codigo_label.y1 + 25
         )
-        mat_inversa = pagina.derotation_matrix
-        nat_box_desc = view_box_desc * mat_inversa
+        texto_cod_celda = pagina.get_text("text", clip=view_box_codigo * mat_inversa).strip()
+        
+        # Extraer el valor ignorando la etiqueta "CODIGO:"
+        match_cod = re.search(r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b', texto_cod_celda)
+        if match_cod:
+            codigo_plano = match_cod.group(0)
+        else:
+            txt_limpio = re.sub(r'(?i)CODIGO\s*:\s*', '', texto_cod_celda).strip()
+            if txt_limpio:
+                codigo_plano = txt_limpio.split('\n')[0].strip()
 
-        texto_celda = pagina.get_text("text", clip=nat_box_desc).strip()
-        lineas = [l.strip() for l in texto_celda.split('\n') if l.strip()]
+    # Fallback para el código dentro de la ROI
+    if codigo_plano == "No detectado":
+        texto_roi_completo = pagina.get_text("text", clip=nat_roi_rotulo)
+        match_fall = re.search(r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b', texto_roi_completo)
+        if match_fall:
+            codigo_plano = match_fall.group(0)
 
-        lineas_limpias = []
-        for l in lineas:
-            l_limp = limpiar_texto_comillas(l)
-            l_up = l_limp.upper()
-            palabras_descarte = [
-                "ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "CÓDIGO", 
-                "500M", "100M", "200M", "300M", "400M", "ESCALA GRAFICA", "REVISION"
-            ]
-            if l_limp and not any(k in l_up for k in palabras_descarte) and l_limp != codigo_plano:
-                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l_limp) and len(l_limp) > 3:
-                    lineas_limpias.append(l_limp)
+    # 2. CAPTURA DIRECTA DE LA DESCRIPCIÓN / TÍTULO
+    titulo_plano = "No detectado"
+    rect_proyecto_label = None
 
-        if lineas_limpias:
-            titulo_plano = " - ".join(lineas_limpias[:3])
+    for w in words:
+        texto_w = w[4].upper().strip()
+        if "PROYECTO" in texto_w:
+            r_nativo = fitz.Rect(w[0], w[1], w[2], w[3])
+            rect_proyecto_label = r_nativo * mat_directa
+            break
 
-    if titulo_plano == "No detectado":
-        view_roi_cajetin = fitz.Rect(ancho_v * 0.55, alto_v * 0.70, ancho_v, alto_v)
-        nat_roi_cajetin = view_roi_cajetin * pagina.derotation_matrix
-
-        texto_roi = pagina.get_text("text", clip=nat_roi_cajetin)
-        lineas_fallback = [l.strip() for l in texto_roi.split('\n') if len(l.strip()) > 3]
+    if rect_proyecto_label:
+        # Bounding box centrado en la celda del título (a la izquierda del recuadro de código/escala)
+        view_box_desc = fitz.Rect(
+            rect_proyecto_label.x0 - 5,
+            rect_proyecto_label.y1 + 2,
+            rect_proyecto_label.x0 + 380,
+            rect_proyecto_label.y1 + 100
+        )
+        texto_desc_celda = pagina.get_text("text", clip=view_box_desc * mat_inversa)
+        lineas_raw = [l.strip() for l in texto_desc_celda.split('\n') if l.strip()]
 
         lineas_validas = []
-        for l in lineas_fallback:
-            l_limp = limpiar_texto_comillas(l)
-            l_up = l_limp.upper()
-            palabras_descarte = [
-                "ESCALA", "FECHA", "PROYECTO", "INDICADA", "CODIGO", "MTC", 
-                "MINISTERIO", "INTERSUR", "ESCALA GRAFICA", "500M", "400M", "300M", "200M", "100M"
-            ]
-            if l_limp and not any(k in l_up for k in palabras_descarte) and l_limp != codigo_plano:
-                if not re.match(r'^[\+\-]?\d+[\.\,\+\d]*\s*m?$', l_limp) and len(l_limp) > 3:
-                    lineas_validas.append(l_limp)
+        for line in lineas_raw:
+            # Descartar frases entre comillas completas (ej. '"ME - N° 154"')
+            if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', line):
+                continue
+
+            line_up = line.upper()
+            palabras_filtro = ["PROYECTO", "ESCALA", "FECHA", "CODIGO", "CÓDIGO", "INDICADA"]
+            if any(p in line_up for p in palabras_filtro) or line == codigo_plano:
+                continue
+
+            # Limpiar comillas residuales y guiones extremos
+            line_limpia = re.sub(r'["“"”]', '', line).strip()
+            line_limpia = re.sub(r'^\s*[\-\–\—\:]+\s*', '', line_limpia)
+            
+            if line_limpia and len(line_limpia) > 2:
+                lineas_validas.append(line_limpia)
 
         if lineas_validas:
-            titulo_plano = " - ".join(lineas_validas[:3])
+            titulo_plano = " - ".join(lineas_validas)
 
-    if titulo_plano != "No detectado":
-        titulo_plano = limpiar_texto_comillas(titulo_plano)
+    # Fallback para el título dentro de la ROI
+    if titulo_plano == "No detectado":
+        texto_roi_completo = pagina.get_text("text", clip=nat_roi_rotulo)
+        lineas_fall = [l.strip() for l in texto_roi_completo.split('\n') if l.strip()]
+        
+        lineas_validas = []
+        for line in lineas_fall:
+            if re.match(r'^\s*["“"”\'].*?["“"”\']\s*$', line):
+                continue
+            line_up = line.upper()
+            if any(p in line_up for p in ["PROYECTO", "ESCALA", "FECHA", "CODIGO", "INDICADA", "2026", "JUNIO", "MTC"]):
+                continue
+            if line == codigo_plano:
+                continue
+            line_limpia = re.sub(r'["“"”]', '', line).strip()
+            if line_limpia and len(line_limpia) > 3:
+                lineas_validas.append(line_limpia)
+
+        if lineas_validas:
+            titulo_plano = " - ".join(lineas_validas[:2])
 
     return codigo_plano, titulo_plano
 
@@ -306,14 +321,11 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
 
     candidatos = []
 
-    # Recorremos la hoja evaluando la cuadrícula según el paso seleccionado
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
-            # Excluir la zona interna del cajetín principal (esquina inferior derecha)
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
-            # Comprobar si solapa con sellos puestos en la misma página
             colision = False
             for (sx, sy, sw, sh) in sellos_ya_puestos:
                 if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
@@ -323,12 +335,10 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
             if colision:
                 continue
 
-            # Contar píxeles ocupados por dibujo o líneas
             caja = binaria[y : y + alto_sello, x : x + ancho_sello]
             pixeles_ocupados = cv2.countNonZero(caja)
             porcentaje_libre = 1.0 - (pixeles_ocupados / float(area_sello))
 
-            # Puntuación combinada (Espacio blanco + Cercanía a la zona deseada)
             score_libre = porcentaje_libre * 100.0
             factor_x = x / float(ancho_img)
             factor_y = y / float(alto_img)
@@ -340,7 +350,6 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     if not candidatos:
         return 50, 50
 
-    # Ordenar y seleccionar la posición con el mejor puntaje global
     candidatos.sort(key=lambda item: item[0], reverse=True)
     mejor_score, mejor_libre, mejor_x, mejor_y = candidatos[0]
 
