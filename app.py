@@ -194,10 +194,8 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
 def limpiar_texto_comillas(texto):
     if not texto:
         return ""
-    # Elimina cualquier texto encerrado en comillas dobles, simples o tipográficas (ej: "ME - 154 KM 200+300")
     t_sin = re.sub(r'["“"”\'].*?["“"”\']', '', texto)
     t_sin = re.sub(r'["“"”]', '', t_sin)
-    # Limpia guiones sobrantes al inicio, final o repetidos
     t_limpio = re.sub(r'^\s*[\-\–\—\:]+\s*', '', t_sin)
     t_limpio = re.sub(r'\s*[\-\–\—\:]+\s*$', '', t_limpio)
     t_limpio = re.sub(r'\s*[\-\–\—\:]\s*[\-\–\—\:]+\s*', ' - ', t_limpio)
@@ -299,18 +297,23 @@ def extraer_datos_inteligentes_cajetin(pagina):
 
     return codigo_plano, titulo_plano
 
+# --- ALGORITMO DE BÚSQUEDA Y PUNTUACIÓN DE ESPACIO LIBRE (RECORRE Y EVALÚA TODA LA HOJA) ---
 def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos):
     _, binaria = cv2.threshold(imagen_gris, 230, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
     area_sello = ancho_sello * alto_sello
-    pad, paso = 20, 25
+    pad, paso = 20, 20
 
     candidatos = []
+
+    # Recorremos completamente la hoja evaluando todas las posiciones candidatas
     for x in range(ancho_img - ancho_sello - 30, 30, -paso):
         for y in range(alto_img - alto_sello - 30, 30, -paso):
+            # Excluir el área del cajetín principal (cuadrante inferior derecho)
             if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
                 continue
 
+            # Comprobar colisión con otros sellos ya ubicados
             colision = False
             for (sx, sy, sw, sh) in sellos_ya_puestos:
                 if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
@@ -320,26 +323,34 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
             if colision:
                 continue
 
+            # Contar los píxeles ocupados en la región
             caja = binaria[y : y + alto_sello, x : x + ancho_sello]
             pixeles_ocupados = cv2.countNonZero(caja)
-            porcentaje_libre = 1.0 - (pixeles_ocupados / area_sello)
-            candidatos.append((porcentaje_libre, x, y))
+            porcentaje_libre = 1.0 - (pixeles_ocupados / float(area_sello))
+
+            # --- SISTEMA DE PUNTUACIÓN (SCORE GLOBAL) ---
+            # 1. Porcentaje de espacio libre (peso primario)
+            score_libre = porcentaje_libre * 100.0
+
+            # 2. Bonificación por posicionamiento estratégico (preferencia zona inferior-derecha permitida)
+            factor_x = x / float(ancho_img)
+            factor_y = y / float(alto_img)
+            bonif_posicion = (factor_x * 5.0) + (factor_y * 5.0)
+
+            score_total = score_libre + bonif_posicion
+            candidatos.append((score_total, porcentaje_libre, x, y))
 
     if not candidatos:
         return 50, 50
 
-    for libre, x, y in candidatos:
-        if libre >= 0.99:
-            return x, y
-    for libre, x, y in candidatos:
-        if libre >= 0.80:
-            return x, y
-
+    # Ordenar candidatos de mayor a menor puntuación y seleccionar la MEJOR ZONA DE TODA LA HOJA
     candidatos.sort(key=lambda item: item[0], reverse=True)
-    return candidatos[0][1], candidatos[0][2]
+    mejor_score, mejor_libre, mejor_x, mejor_y = candidatos[0]
 
-# --- SELLO CON IMAGEN REAL PNG DINÁMICA (CC / CI) CON FECHA EMPATADA ---
-def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color_rgb, texto_fecha, rotacion, tipo_fallback):
+    return mejor_x, mejor_y
+
+# --- ESTAMPADO DE SELLO DINÁMICO DESDE PNG (CC / CI) CON FECHA Y ENGROSADO DE LETRAS ---
+def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color_rgb, texto_fecha, rotacion):
     ruta_png = None
     posibles_rutas = [
         nombre_png,
@@ -351,90 +362,49 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
             ruta_png = r
             break
 
-    if ruta_png:
-        # 1. Insertar la imagen PNG redimensionada exactamente a 7.1cm x 2.6cm
-        pagina.insert_image(rect_nativo, filename=ruta_png, rotate=rotacion)
+    # Si NO existe la imagen PNG, no se crea ningún sello vectorial y se genera alerta
+    if not ruta_png:
+        return False, f"⚠️ No se encontró la imagen '{nombre_png}' en la carpeta raíz o en '{CARPETA_SELLOS}'."
 
-        # 2. Parsear día, mes y año de 2 dígitos (ej. 16/08/2026 -> 16, 08, 26)
-        partes = re.split(r'[/.-]', texto_fecha.strip())
-        if len(partes) >= 3:
-            dia_txt = partes[0].zfill(2)
-            mes_txt = partes[1].zfill(2)
-            anio_txt = partes[2][-2:].zfill(2)
-        else:
-            dia_txt, mes_txt, anio_txt = "", "", ""
+    # 1. Insertar la imagen PNG redimensionada
+    pagina.insert_image(rect_nativo, filename=ruta_png, rotate=rotacion)
 
-        # Tamaño más grande (~12.8pt) y fuente Helvetica-Bold para un look alargado/Arial Narrow
-        fontname = "hebo"          
-        fontsize = 0.45 * CM_TO_PT  
-
-        # Posición vertical más elevada (0.81) para que los números descansen exactos sobre los puntos
-        y_vista = view_rect.y0 + (view_rect.height * 0.81)
-
-        posiciones = [
-            (dia_txt, 0.38),   # Día sobre la primera línea punteada
-            (mes_txt, 0.62),   # Mes sobre la segunda línea punteada
-            (anio_txt, 0.89)   # Año sobre la tercera línea punteada después de /20
-        ]
-
-        for txt, rel_x in posiciones:
-            if not txt:
-                continue
-            ancho_txt = fitz.get_text_length(txt, fontname=fontname, fontsize=fontsize)
-            x_vista = view_rect.x0 + (view_rect.width * rel_x) - (ancho_txt / 2.0)
-
-            pt_vista = fitz.Point(x_vista, y_vista)
-            pt_nativo = pt_vista * pagina.derotation_matrix
-
-            pagina.insert_text(pt_nativo, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
+    # 2. Parsear fecha (Día, Mes, Año)
+    partes = re.split(r'[/.-]', texto_fecha.strip())
+    if len(partes) >= 3:
+        dia_txt = partes[0].zfill(2)
+        mes_txt = partes[1].zfill(2)
+        anio_txt = partes[2][-2:].zfill(2)
     else:
-        # Fallback por si la imagen PNG no existe en la carpeta
-        agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_fallback, texto_fecha, rotacion)
+        dia_txt, mes_txt, anio_txt = "", "", ""
 
-# --- SELLO VECTORIAL RESPALDO O COPIA INFORMATIVA ---
-def agregar_sello_vectorial(pagina, view_rect, rect_nativo, tipo_sello, texto_fecha, rotacion):
-    if "CC" in tipo_sello:
-        color = (0.80, 0.0, 0.0)
-        linea_2 = "COPIA CONTROLADA"
-    else:
-        color = (0.0, 0.25, 0.75)
-        linea_2 = "COPIA INFORMATIVA"
+    # Fuente en negrita y tamaño aumentado para un texto bien grueso y legible
+    fontname = "hebo"          # Helvetica-Bold
+    fontsize = 0.50 * CM_TO_PT  # ~14.1pt
 
-    shape = pagina.new_shape()
-    try:
-        shape.draw_rect(rect_nativo, radius=3)
-    except (TypeError, ValueError):
-        shape.draw_rect(rect_nativo)
-        
-    shape.finish(color=color, fill=None, width=1.8)
-    shape.commit()
+    y_vista = view_rect.y0 + (view_rect.height * 0.81)
 
-    linea_1 = "OSP INGENIERÍA"
-    linea_3 = f"FECHA: {texto_fecha}"
-
-    filas_texto = [
-        (linea_1, 0.23, 0.47 * CM_TO_PT, "hebo"),
-        (linea_2, 0.58, 0.67 * CM_TO_PT, "hebo"),
-        (linea_3, 0.88, 0.41 * CM_TO_PT, "helv")
+    posiciones = [
+        (dia_txt, 0.38),   # Día
+        (mes_txt, 0.62),   # Mes
+        (anio_txt, 0.89)   # Año
     ]
 
-    for texto, prop_y, target_fontsize, fontname in filas_texto:
-        ancho_box = view_rect.width
-        fontsize = target_fontsize
-        ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
-
-        max_ancho = ancho_box * 0.92
-        if ancho_txt > max_ancho:
-            fontsize = fontsize * (max_ancho / ancho_txt)
-            ancho_txt = fitz.get_text_length(texto, fontname=fontname, fontsize=fontsize)
-
-        x_vista = view_rect.x0 + (ancho_box - ancho_txt) / 2.0
-        y_vista = view_rect.y0 + (view_rect.height * prop_y)
+    for txt, rel_x in posiciones:
+        if not txt:
+            continue
+        ancho_txt = fitz.get_text_length(txt, fontname=fontname, fontsize=fontsize)
+        x_vista = view_rect.x0 + (view_rect.width * rel_x) - (ancho_txt / 2.0)
 
         pt_vista = fitz.Point(x_vista, y_vista)
         pt_nativo = pt_vista * pagina.derotation_matrix
 
-        pagina.insert_text(pt_nativo, texto, fontsize=fontsize, fontname=fontname, color=color, rotate=rotacion)
+        # Doble pase con microrrefinamiento de trazo para engrosar la tipografía
+        pagina.insert_text(pt_nativo, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
+        pt_nativo_offset = fitz.Point(pt_nativo.x + 0.3, pt_nativo.y)
+        pagina.insert_text(pt_nativo_offset, txt, fontsize=fontsize, fontname=fontname, color=color_rgb, rotate=rotacion)
+
+    return True, None
 
 def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fecha):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
@@ -443,6 +413,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
     doc = fitz.open(path_pdf)
     resumen_planos = []
+    alertas_sellos = []
 
     ancho_sello_pt = ANCHO_SELLO_CM * CM_TO_PT
     alto_sello_pt = ALTO_SELLO_CM * CM_TO_PT
@@ -470,7 +441,6 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             x_px, y_px = buscar_posicion_espacio_libre(
                 imagen_gris, ancho_sello_px, alto_sello_px, sellos_puestos_hoja
             )
-            sellos_puestos_hoja.append((x_px, y_px, ancho_sello_px, alto_sello_px))
 
             x0_pt_view = x_px * 0.72
             y0_pt_view = y_px * 0.72
@@ -478,21 +448,34 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             view_rect = fitz.Rect(x0_pt_view, y0_pt_view, x0_pt_view + ancho_sello_pt, y0_pt_view + alto_sello_pt)
             rect_nativo = view_rect * pagina.derotation_matrix
 
+            exito = True
+            msg_err = None
+
             if item_sello == "CC - Copia Controlada (Rojo)":
-                agregar_sello_png_dinamico(
+                exito, msg_err = agregar_sello_png_dinamico(
                     pagina, view_rect, rect_nativo, 
                     "cc_sin_fondo.png", (0.80, 0.0, 0.0), 
-                    texto_fecha, rot, item_sello
+                    texto_fecha, rot
                 )
             elif item_sello == "CI - Copia Informativa (Azul)":
-                agregar_sello_png_dinamico(
+                exito, msg_err = agregar_sello_png_dinamico(
                     pagina, view_rect, rect_nativo, 
                     "ci_sin_fondo.png", (0.0, 0.20, 0.65), 
-                    texto_fecha, rot, item_sello
+                    texto_fecha, rot
                 )
             else:
-                ruta_img = libreria_archivos[item_sello]
-                pagina.insert_image(rect_nativo, filename=ruta_img, rotate=rot)
+                ruta_img = libreria_archivos.get(item_sello)
+                if ruta_img and os.path.exists(ruta_img):
+                    pagina.insert_image(rect_nativo, filename=ruta_img, rotate=rot)
+                else:
+                    exito = False
+                    msg_err = f"⚠️ No se encontró la imagen del sello '{item_sello}'."
+
+            if exito:
+                sellos_puestos_hoja.append((x_px, y_px, ancho_sello_px, alto_sello_px))
+            else:
+                if msg_err and msg_err not in alertas_sellos:
+                    alertas_sellos.append(msg_err)
 
     output_pdf_path = path_pdf.replace(".pdf", "_SELLADO.pdf")
     doc.save(output_pdf_path)
@@ -504,7 +487,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
     os.remove(path_pdf)
     os.remove(output_pdf_path)
 
-    return pdf_final_bytes, resumen_planos
+    return pdf_final_bytes, resumen_planos, alertas_sellos
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon="📐", layout="wide")
@@ -559,7 +542,7 @@ st.divider()
 if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
     if st.button("🚀 Estampar PDF y Generar Todo", use_container_width=True):
         with st.spinner("Procesando planos, rellenando Excel y exportando PDFs..."):
-            pdf_res, resumen = procesar_pdf(
+            pdf_res, resumen, alertas_sellos = procesar_pdf(
                 archivo_pdf.read(), 
                 sellos_seleccionados, 
                 libreria_archivos, 
@@ -605,6 +588,7 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
             st.session_state['excels_generados'] = excels_generados
             st.session_state['pdf_nombre'] = f"{secuencia_gr}_{rev_tag}_PLANOS_SELLADOS.pdf"
             st.session_state['errores_pdf'] = errores_pdf
+            st.session_state['alertas_sellos'] = alertas_sellos
 
             if lista_pdfs_guias:
                 st.session_state['pdf_guias_unificado'] = unificar_pdfs(lista_pdfs_guias)
@@ -614,6 +598,10 @@ if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
 if 'resumen' in st.session_state:
     st.success("¡Documentos y Guías de Remisión procesados correctamente!")
     
+    if st.session_state.get('alertas_sellos'):
+        for alert in st.session_state['alertas_sellos']:
+            st.warning(alert)
+
     if st.session_state.get('errores_pdf'):
         st.warning("⚠️ Ocurrió una observación al exportar los PDFs de los Excels:")
         for err in st.session_state['errores_pdf']:
