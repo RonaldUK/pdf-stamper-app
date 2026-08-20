@@ -455,13 +455,13 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
             if item_sello == "CC - Copia Controlada (Rojo)":
                 exito, msg_err = agregar_sello_png_dinamico(
                     pagina, view_rect, rect_nativo, 
-                    "cc_sin_fondo.png", (0.80, 0.0, 0.0), 
+                    "cc_sin_fondo.png", (0.0, 0.20, 0.65), 
                     texto_fecha, rot
                 )
             elif item_sello == "CI - Copia Informativa (Azul)":
                 exito, msg_err = agregar_sello_png_dinamico(
                     pagina, view_rect, rect_nativo, 
-                    "ci_sin_fondo.png", (0.0, 0.20, 0.65), 
+                    "ci_sin_fondo.png", (0.80, 0.0, 0.0), 
                     texto_fecha, rot
                 )
             else:
