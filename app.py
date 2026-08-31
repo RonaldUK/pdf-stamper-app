@@ -28,12 +28,42 @@ PLANTILLA_EXCEL = "PLANTILLA_GR.xlsx"
 if not os.path.exists(CARPETA_SELLOS):
     os.makedirs(CARPETA_SELLOS)
 
+# --- MÓDULO DE AUTENTICACIÓN (LISTO PARA CONECTAR A SUPABASE) ---
+def inicializar_estado_sesion():
+    if "autenticado" not in st.session_state:
+        st.session_state.autenticado = False
+    if "usuario" not in st.session_state:
+        st.session_state.usuario = None
+
+def validar_credenciales(usuario, clave):
+    # Simulación local. Reemplazar esta lógica por la API de Supabase Auth
+    if usuario == "admin" and clave == "admin":
+        return True
+    return False
+
+def vista_login():
+    st.markdown("### 🔒 Iniciar Sesión")
+    with st.form("login_form"):
+        user_input = st.text_input("Usuario")
+        pass_input = st.text_input("Contraseña", type="password")
+        submit = st.form_submit_button("Ingresar", use_container_width=True)
+        
+        if submit:
+            if validar_credenciales(user_input, pass_input):
+                st.session_state.autenticado = True
+                st.session_state.usuario = user_input
+                st.success("Sesión iniciada correctamente")
+                st.rerun()
+            else:
+                st.error("⚠️ Usuario o contraseña incorrectos")
+
+# --- FUNCIONES DE BASE DE DATOS DE SELLOS ---
 def obtener_libreria_sellos():
     extensiones = ('*.png', '*.jpg', '*.jpeg', '*.PNG', '*.JPG')
     archivos = []
     for ext in extensiones:
         archivos.extend(glob.glob(os.path.join(CARPETA_SELLOS, ext)))
-    
+
     libreria = {}
     for ruta in archivos:
         nombre_base = os.path.basename(ruta)
@@ -95,12 +125,11 @@ def convertir_excel_a_pdf(excel_bytes):
             tmp_excel_path = tmp_excel.name
 
         out_dir = tempfile.gettempdir()
-        
         cmd = ["libreoffice", "--headless", "--convert-to", "pdf", tmp_excel_path, "--outdir", out_dir]
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
         expected_pdf_path = os.path.splitext(tmp_excel_path)[0] + ".pdf"
-        
+
         if os.path.exists(expected_pdf_path):
             with open(expected_pdf_path, "rb") as f:
                 pdf_bytes = f.read()
@@ -136,7 +165,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
         return None, None
 
     wb = openpyxl.load_workbook(plantilla_path)
-    
+
     if "osp" in wb.sheetnames:
         ws = wb["osp"]
         wb.active = ws
@@ -153,7 +182,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
 
     font_bold = InlineFont(b=True, rFont="Calibri", sz=11)
     font_normal = InlineFont(b=False, rFont="Calibri", sz=11)
-    
+
     rich_i5 = CellRichText([
         TextBlock(font_bold, num_str),
         TextBlock(font_normal, resto_str)
@@ -179,7 +208,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
 
     ultima_fila_usada = fila_inicio + cant_items - 1
     fila_diagonal_inicio = ultima_fila_usada + 1
-    
+
     agregar_linea_diagonal_excel(ws, fila_diagonal_inicio, fila_fin_linea=44)
 
     output_stream = io.BytesIO()
@@ -187,7 +216,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- FUNCIONES DE LIMPIEZA Y DETECCIÓN AISLADAS ---
+# --- FUNCIONES DE EXTRACCIÓN Y DETECCIÓN POR FORMATO DE HOJA ---
 
 def limpiar_texto_comillas(texto):
     if not texto:
@@ -215,7 +244,6 @@ def extraer_codigo_plano(pagina):
     if match_cod:
         return match_cod.group(0)
 
-    # Fallback con texto completo de la página
     texto_completo = pagina.get_text("text")
     patrones_codigo = [
         r'\b[A-Z0-9]{2,}(?:-[A-Z0-9]+){2,}(?:-R\d+|-REV\d+)?\b',
@@ -315,6 +343,11 @@ def extraer_datos_inteligentes_cajetin(pagina):
     return codigo_plano, titulo_plano
 
 def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_ya_puestos, paso=10):
+    """
+    DETECCIÓN DUAL SEGÚN EL FORMATO DE HOJA:
+    - Para A4 (o formato vertical similar): Búsqueda en L Invertida (Inferior Izquierda -> Derecha -> Arriba).
+    - Para A3 (o formato horizontal grande): Búsqueda Original (Inferior Derecha -> Izquierda -> Arriba).
+    """
     _, binaria = cv2.threshold(imagen_gris, 230, 255, cv2.THRESH_BINARY_INV)
     alto_img, ancho_img = binaria.shape
     area_sello = ancho_sello * alto_sello
@@ -322,34 +355,70 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
 
     candidatos = []
 
-    for x in range(ancho_img - ancho_sello - 30, 30, -paso):
+    # Determinar si la hoja es A4 según la dimensión mayor y el área en píxeles (a 100 dpi)
+    max_dim = max(ancho_img, alto_img)
+    es_a4 = max_dim < 1300  # A4 tiene ~1169px en su dimensión más larga a 100 DPI
+
+    if es_a4:
+        # --- ESTRATEGIA A4: BÚSQUEDA EN L INVERTIDA (INFERIOR IZQUIERDA) ---
         for y in range(alto_img - alto_sello - 30, 30, -paso):
-            if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
-                continue
+            for x in range(30, ancho_img - ancho_sello - 30, paso):
+                if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
+                    continue
 
-            colision = False
-            for (sx, sy, sw, sh) in sellos_ya_puestos:
-                if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
-                        y + alto_sello + pad < sy or y > sy + sh + pad):
-                    colision = True
-                    break
-            if colision:
-                continue
+                colision = False
+                for (sx, sy, sw, sh) in sellos_ya_puestos:
+                    if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
+                            y + alto_sello + pad < sy or y > sy + sh + pad):
+                        colision = True
+                        break
+                if colision:
+                    continue
 
-            caja = binaria[y : y + alto_sello, x : x + ancho_sello]
-            pixeles_ocupados = cv2.countNonZero(caja)
-            porcentaje_libre = 1.0 - (pixeles_ocupados / float(area_sello))
+                caja = binaria[y : y + alto_sello, x : x + ancho_sello]
+                pixeles_ocupados = cv2.countNonZero(caja)
+                porcentaje_libre = 1.0 - (pixeles_ocupados / float(area_sello))
 
-            score_libre = porcentaje_libre * 100.0
-            factor_x = x / float(ancho_img)
-            factor_y = y / float(alto_img)
-            bonif_posicion = (factor_x * 5.0) + (factor_y * 5.0)
+                score_libre = porcentaje_libre * 100.0
+                factor_x = 1.0 - (x / float(ancho_img))  # Priorizar izquierda
+                factor_y = y / float(alto_img)           # Priorizar abajo
+                bonif_posicion = (factor_x * 10.0) + (factor_y * 10.0)
 
-            score_total = score_libre + bonif_posicion
-            candidatos.append((score_total, porcentaje_libre, x, y))
+                score_total = score_libre + bonif_posicion
+                candidatos.append((score_total, porcentaje_libre, x, y))
 
-    if not candidatos:
-        return 50, 50
+        if not candidatos:
+            return 30, alto_img - alto_sello - 30
+    else:
+        # --- ESTRATEGIA A3: BÚSQUEDA ORIGINAL (DERECHA A IZQUIERDA / ABAJO A ARRIBA) ---
+        for x in range(ancho_img - ancho_sello - 30, 30, -paso):
+            for y in range(alto_img - alto_sello - 30, 30, -paso):
+                if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
+                    continue
+
+                colision = False
+                for (sx, sy, sw, sh) in sellos_ya_puestos:
+                    if not (x + ancho_sello + pad < sx or x > sx + sw + pad or
+                            y + alto_sello + pad < sy or y > sy + sh + pad):
+                        colision = True
+                        break
+                if colision:
+                    continue
+
+                caja = binaria[y : y + alto_sello, x : x + ancho_sello]
+                pixeles_ocupados = cv2.countNonZero(caja)
+                porcentaje_libre = 1.0 - (pixeles_ocupados / float(area_sello))
+
+                score_libre = porcentaje_libre * 100.0
+                factor_x = x / float(ancho_img)  # Priorizar derecha
+                factor_y = y / float(alto_img)   # Priorizar abajo
+                bonif_posicion = (factor_x * 5.0) + (factor_y * 5.0)
+
+                score_total = score_libre + bonif_posicion
+                candidatos.append((score_total, porcentaje_libre, x, y))
+
+        if not candidatos:
+            return 50, 50
 
     candidatos.sort(key=lambda item: item[0], reverse=True)
     mejor_score, mejor_libre, mejor_x, mejor_y = candidatos[0]
@@ -362,7 +431,7 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
         nombre_png,
         os.path.join(CARPETA_SELLOS, nombre_png)
     ]
-    
+
     for r in posibles_rutas:
         if os.path.exists(r):
             ruta_png = r
@@ -490,181 +559,201 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
     return pdf_final_bytes, resumen_planos, alertas_sellos
 
-# --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon="📐", layout="wide")
+# --- APLICACIÓN PRINCIPAL STREAMLIT ---
+def main():
+    st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon="📐", layout="wide")
+    inicializar_estado_sesion()
 
-st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
-st.caption("Procesamiento automático conservando la plantilla Excel exacta")
+    if not st.session_state.autenticado:
+        col_c, _ = st.columns([1, 2])
+        with col_c:
+            vista_login()
+        return
 
-st.sidebar.header("⚙️ Ajustes de Búsqueda")
-paso_evaluacion = st.sidebar.slider(
-    "🎯 Precisión de Escaneo (Paso en px):",
-    min_value=5,
-    max_value=30,
-    value=10,
-    step=5,
-    help="Valores menores (ej. 5 o 10 px) ajustan el sello con precisión milimétrica sobre reglas o cajetines."
-)
+    # --- BARRA LATERAL (USUARIO Y CONFIGURACIÓN) ---
+    st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state.usuario}`")
+    if st.sidebar.button("🔴 Cerrar Sesión"):
+        st.session_state.autenticado = False
+        st.session_state.usuario = None
+        st.rerun()
 
-st.sidebar.header("📁 Cargar Nuevas Firmas")
-with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
-    nuevo_nombre = st.sidebar.text_input("Nombre de la firma/sello:")
-    archivo_nuevo = st.sidebar.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
-    
-    if st.sidebar.button("💾 Guardar Sello"):
-        if nuevo_nombre.strip() and archivo_nuevo:
-            ext = archivo_nuevo.name.split(".")[-1]
-            ruta_dest = os.path.join(CARPETA_SELLOS, f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}")
-            with open(ruta_dest, "wb") as f:
-                f.write(archivo_nuevo.read())
-            st.sidebar.success("¡Sello Guardado!")
-            st.rerun()
-
-col1, col2, col3 = st.columns([1.2, 1, 1])
-
-with col1:
-    archivo_pdf = st.file_uploader("1. Selecciona tu PDF consolidado:", type=["pdf"])
-    secuencia_gr = st.text_input("2. Secuencia Base (ej: 8418-OSP-SG-2026):", value="8418-OSP-SG-2026")
-
-with col2:
-    fecha_obj = st.date_input("3. Fecha de Sellado (J5):", value=datetime.date.today(), format="DD/MM/YYYY")
-    texto_fecha = fecha_obj.strftime("%d/%m/%Y")
-    
-    areas_opciones = ["SUPERVISION", "CALIDAD", "TOPOGRAFIA", "PRODUCCION"]
-    areas_seleccionadas = st.multiselect(
-        "4. Selecciona Áreas para Generar Guías:",
-        options=areas_opciones,
-        default=areas_opciones
+    st.sidebar.divider()
+    st.sidebar.header("⚙️ Ajustes de Búsqueda")
+    paso_evaluacion = st.sidebar.slider(
+        "🎯 Precisión de Escaneo (Paso en px):",
+        min_value=5,
+        max_value=30,
+        value=10,
+        step=5,
+        help="Ajusta la velocidad y precisión del cálculo de espacio libre."
     )
 
-libreria_archivos = obtener_libreria_sellos()
-opciones_sellos = ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"] + list(libreria_archivos.keys())
+    st.sidebar.header("📁 Cargar Nuevas Firmas")
+    with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
+        nuevo_nombre = st.sidebar.text_input("Nombre de la firma/sello:")
+        archivo_nuevo = st.sidebar.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
 
-with col3:
-    sellos_seleccionados = st.multiselect(
-        "5. Selecciona Sellos/Firmas:",
-        options=opciones_sellos,
-        default=[opciones_sellos[0]]
-    )
+        if st.sidebar.button("💾 Guardar Sello"):
+            if nuevo_nombre.strip() and archivo_nuevo:
+                ext = archivo_nuevo.name.split(".")[-1]
+                ruta_dest = os.path.join(CARPETA_SELLOS, f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}")
+                with open(ruta_dest, "wb") as f:
+                    f.write(archivo_nuevo.read())
+                st.sidebar.success("¡Sello Guardado!")
+                st.rerun()
 
-st.divider()
+    # --- INTERFAZ PRINCIPAL ---
+    st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
+    st.caption("Estrategia adaptativa: L Invertida para A4 y Escaneo Estándar para A3")
 
-if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
-    if st.button("🚀 Estampar PDF y Generar Todo", use_container_width=True):
-        with st.spinner(f"Procesando planos con paso de {paso_evaluacion}px, rellenando Excel y exportando PDFs..."):
-            pdf_res, resumen, alertas_sellos = procesar_pdf(
-                archivo_pdf.read(), 
-                sellos_seleccionados, 
-                libreria_archivos, 
-                texto_fecha,
-                paso=paso_evaluacion
-            )
-            
-            rev_tag = "REV"
-            if resumen and resumen[0]["Código de Plano"] != "No detectado":
-                rev_num = extraer_numero_revision(resumen[0]["Código de Plano"])
-                if rev_num:
-                    rev_tag = f"R{rev_num}"
+    col1, col2, col3 = st.columns([1.2, 1, 1])
 
-            excels_generados = {}
-            lista_pdfs_guias = []
-            errores_pdf = []
+    with col1:
+        archivo_pdf = st.file_uploader("1. Selecciona tu PDF consolidado:", type=["pdf"])
+        secuencia_gr = st.text_input("2. Secuencia Base (ej: 8418-OSP-SG-2026):", value="8418-OSP-SG-2026")
 
-            for idx, area in enumerate(areas_seleccionadas):
-                excel_bytes, secuencia_inc = generar_excel_por_area(
-                    resumen_planos=resumen,
-                    fecha_texto=texto_fecha,
-                    secuencia_base=secuencia_gr,
-                    area=area,
-                    offset_correlativo=idx
-                )
-                if excel_bytes:
-                    nombre_excel = f"{secuencia_inc}_{rev_tag}_{area}.xlsx"
-                    pdf_excel, error_msg = convertir_excel_a_pdf(excel_bytes)
-                    
-                    if pdf_excel:
-                        lista_pdfs_guias.append(pdf_excel)
-                    elif error_msg:
-                        errores_pdf.append(f"{area}: {error_msg}")
+    with col2:
+        fecha_obj = st.date_input("3. Fecha de Sellado (J5):", value=datetime.date.today(), format="DD/MM/YYYY")
+        texto_fecha = fecha_obj.strftime("%d/%m/%Y")
 
-                    excels_generados[area] = {
-                        "bytes": excel_bytes,
-                        "nombre": nombre_excel,
-                        "secuencia": secuencia_inc,
-                        "pdf_bytes": pdf_excel
-                    }
-
-            st.session_state['pdf_res'] = pdf_res
-            st.session_state['resumen'] = resumen
-            st.session_state['excels_generados'] = excels_generados
-            st.session_state['pdf_nombre'] = f"{secuencia_gr}_{rev_tag}_PLANOS_SELLADOS.pdf"
-            st.session_state['errores_pdf'] = errores_pdf
-            st.session_state['alertas_sellos'] = alertas_sellos
-
-            if lista_pdfs_guias:
-                st.session_state['pdf_guias_unificado'] = unificar_pdfs(lista_pdfs_guias)
-            else:
-                st.session_state['pdf_guias_unificado'] = None
-
-if 'resumen' in st.session_state:
-    st.success("¡Documentos y Guías de Remisión procesados correctamente!")
-    
-    if st.session_state.get('alertas_sellos'):
-        for alert in st.session_state['alertas_sellos']:
-            st.warning(alert)
-
-    if st.session_state.get('errores_pdf'):
-        st.warning("⚠️ Ocurrió una observación al exportar los PDFs de los Excels:")
-        for err in st.session_state['errores_pdf']:
-            st.caption(f"- {err}")
-
-    st.subheader("📥 Descargas Generales")
-    
-    col_dl1, col_dl2 = st.columns(2)
-    
-    with col_dl1:
-        st.download_button(
-            "📄 Descargar PDF Planos Sellados", 
-            data=st.session_state['pdf_res'], 
-            file_name=st.session_state['pdf_nombre'], 
-            mime="application/pdf", 
-            use_container_width=True
+        areas_opciones = ["SUPERVISION", "CALIDAD", "TOPOGRAFIA", "PRODUCCION"]
+        areas_seleccionadas = st.multiselect(
+            "4. Selecciona Áreas para Generar Guías:",
+            options=areas_opciones,
+            default=areas_opciones
         )
 
-    with col_dl2:
-        if st.session_state.get('pdf_guias_unificado'):
+    libreria_archivos = obtener_libreria_sellos()
+    opciones_sellos = ["CC - Copia Controlada (Rojo)", "CI - Copia Informativa (Azul)"] + list(libreria_archivos.keys())
+
+    with col3:
+        sellos_seleccionados = st.multiselect(
+            "5. Selecciona Sellos/Firmas:",
+            options=opciones_sellos,
+            default=[opciones_sellos[0]]
+        )
+
+    st.divider()
+
+    if archivo_pdf and sellos_seleccionados and areas_seleccionadas:
+        if st.button("🚀 Estampar PDF y Generar Todo", use_container_width=True):
+            with st.spinner(f"Procesando planos con paso de {paso_evaluacion}px..."):
+                pdf_res, resumen, alertas_sellos = procesar_pdf(
+                    archivo_pdf.read(), 
+                    sellos_seleccionados, 
+                    libreria_archivos, 
+                    texto_fecha,
+                    paso=paso_evaluacion
+                )
+
+                rev_tag = "REV"
+                if resumen and resumen[0]["Código de Plano"] != "No detectado":
+                    rev_num = extraer_numero_revision(resumen[0]["Código de Plano"])
+                    if rev_num:
+                        rev_tag = f"R{rev_num}"
+
+                excels_generados = {}
+                lista_pdfs_guias = []
+                errores_pdf = []
+
+                for idx, area in enumerate(areas_seleccionadas):
+                    excel_bytes, secuencia_inc = generar_excel_por_area(
+                        resumen_planos=resumen,
+                        fecha_texto=texto_fecha,
+                        secuencia_base=secuencia_gr,
+                        area=area,
+                        offset_correlativo=idx
+                    )
+                    if excel_bytes:
+                        nombre_excel = f"{secuencia_inc}_{rev_tag}_{area}.xlsx"
+                        pdf_excel, error_msg = convertir_excel_a_pdf(excel_bytes)
+
+                        if pdf_excel:
+                            lista_pdfs_guias.append(pdf_excel)
+                        elif error_msg:
+                            errores_pdf.append(f"{area}: {error_msg}")
+
+                        excels_generados[area] = {
+                            "bytes": excel_bytes,
+                            "nombre": nombre_excel,
+                            "secuencia": secuencia_inc,
+                            "pdf_bytes": pdf_excel
+                        }
+
+                st.session_state['pdf_res'] = pdf_res
+                st.session_state['resumen'] = resumen
+                st.session_state['excels_generados'] = excels_generados
+                st.session_state['pdf_nombre'] = f"{secuencia_gr}_{rev_tag}_PLANOS_SELLADOS.pdf"
+                st.session_state['errores_pdf'] = errores_pdf
+                st.session_state['alertas_sellos'] = alertas_sellos
+
+                if lista_pdfs_guias:
+                    st.session_state['pdf_guias_unificado'] = unificar_pdfs(lista_pdfs_guias)
+                else:
+                    st.session_state['pdf_guias_unificado'] = None
+
+    if 'resumen' in st.session_state:
+        st.success("¡Documentos y Guías de Remisión procesados correctamente!")
+
+        if st.session_state.get('alertas_sellos'):
+            for alert in st.session_state['alertas_sellos']:
+                st.warning(alert)
+
+        if st.session_state.get('errores_pdf'):
+            st.warning("⚠️ Ocurrió una observación al exportar los PDFs de los Excels:")
+            for err in st.session_state['errores_pdf']:
+                st.caption(f"- {err}")
+
+        st.subheader("📥 Descargas Generales")
+
+        col_dl1, col_dl2 = st.columns(2)
+
+        with col_dl1:
             st.download_button(
-                "📑 Descargar PDF Consolidado de Guías (Todas las Áreas)", 
-                data=st.session_state['pdf_guias_unificado'], 
-                file_name=f"GUIAS_REMISION_CONSOLIDADAS_{datetime.datetime.now().strftime('%Y%m%d')}.pdf", 
+                "📄 Descargar PDF Planos Sellados", 
+                data=st.session_state['pdf_res'], 
+                file_name=st.session_state['pdf_nombre'], 
                 mime="application/pdf", 
                 use_container_width=True
             )
 
-    st.divider()
-    st.markdown("#### 📊 Archivos Excel y PDF de Guías por Área:")
-    cols_excels = st.columns(len(st.session_state['excels_generados']))
-    
-    for idx, (area, data_excel) in enumerate(st.session_state['excels_generados'].items()):
-        with cols_excels[idx]:
-            st.download_button(
-                label=f"🟢 Excel: {data_excel['secuencia']} ({area})",
-                data=data_excel["bytes"],
-                file_name=data_excel["nombre"],
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key=f"excel_{area}"
-            )
-            if data_excel.get("pdf_bytes"):
+        with col_dl2:
+            if st.session_state.get('pdf_guias_unificado'):
                 st.download_button(
-                    label=f"🔴 PDF: {data_excel['secuencia']} ({area})",
-                    data=data_excel["pdf_bytes"],
-                    file_name=f"{data_excel['secuencia']}_{area}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    key=f"pdf_{area}"
+                    "📑 Descargar PDF Consolidado de Guías (Todas las Áreas)", 
+                    data=st.session_state['pdf_guias_unificado'], 
+                    file_name=f"GUIAS_REMISION_CONSOLIDADAS_{datetime.datetime.now().strftime('%Y%m%d')}.pdf", 
+                    mime="application/pdf", 
+                    use_container_width=True
                 )
 
-    st.divider()
-    st.subheader("📋 Resumen de Planos Detectados")
-    st.dataframe(st.session_state['resumen'], use_container_width=True)
+        st.divider()
+        st.markdown("#### 📊 Archivos Excel y PDF de Guías por Área:")
+        cols_excels = st.columns(len(st.session_state['excels_generados']))
+
+        for idx, (area, data_excel) in enumerate(st.session_state['excels_generados'].items()):
+            with cols_excels[idx]:
+                st.download_button(
+                    label=f"🟢 Excel: {data_excel['secuencia']} ({area})",
+                    data=data_excel["bytes"],
+                    file_name=data_excel["nombre"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"excel_{area}"
+                )
+                if data_excel.get("pdf_bytes"):
+                    st.download_button(
+                        label=f"🔴 PDF: {data_excel['secuencia']} ({area})",
+                        data=data_excel["pdf_bytes"],
+                        file_name=f"{data_excel['secuencia']}_{area}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                        key=f"pdf_{area}"
+                    )
+
+        st.divider()
+        st.subheader("📋 Resumen de Planos Detectados")
+        st.dataframe(st.session_state['resumen'], use_container_width=True)
+
+if __name__ == "__main__":
+    main()
