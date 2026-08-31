@@ -101,7 +101,7 @@ def aplicar_estilos_custom():
             color: #ffffff;
         }
         </style>
-    """, unsafe_allow_html=unsafe_allow_html)
+    """, unsafe_allow_html=True)
 
 # --- MÓDULO DE AUTENTICACIÓN CON VISTA DE LOGIN DINÁMICA ---
 def inicializar_estado_sesion():
