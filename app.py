@@ -18,17 +18,92 @@ from openpyxl.drawing.graphic import GroupShape
 # --- CONFIGURACIÓN DE MEDIDAS EXACTAS EN PAPEL (CENTÍMETROS REALES) ---
 CM_TO_PT = 28.34645669
 
-ANCHO_SELLO_CM = 7.1  # 7.1 cm exactos en papel
-ALTO_SELLO_CM = 2.6   # 2.6 cm exactos en papel
+ANCHO_SELLO_CM = 7.1
+ALTO_SELLO_CM = 2.6
 
-# --- CONFIGURACIÓN DE CARPETAS Y PLANTILLA ---
 CARPETA_SELLOS = "firmas_sellos"
 PLANTILLA_EXCEL = "PLANTILLA_GR.xlsx"
+RUTA_LOGO = "logo.png"
 
 if not os.path.exists(CARPETA_SELLOS):
     os.makedirs(CARPETA_SELLOS)
 
-# --- MÓDULO DE AUTENTICACIÓN ---
+# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS Y EFECTOS CÓSMICOS ---
+def aplicar_estilos_custom():
+    st.markdown("""
+        <style>
+        /* Estilos generales de la App */
+        .stApp {
+            background-color: #0d1117;
+            color: #e6edf3;
+        }
+
+        /* Estilo personalizado para el Login */
+        .login-card {
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 58, 138, 0.85));
+            border: 1px solid rgba(192, 192, 192, 0.3);
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 0 25px rgba(56, 189, 248, 0.2);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Efectos de Partículas / Cometas en CSS */
+        @keyframes comet {
+            0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); opacity: 0; }
+            50% { opacity: 0.8; }
+            100% { transform: translateX(200%) translateY(200%) rotate(45deg); opacity: 0; }
+        }
+
+        @keyframes shine {
+            0% { opacity: 0.3; transform: scale(0.98); }
+            50% { opacity: 1; transform: scale(1.02); }
+            100% { opacity: 0.3; transform: scale(0.98); }
+        }
+
+        .comet-effect {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: 1;
+        }
+
+        .comet-effect::before {
+            content: '';
+            position: absolute;
+            width: 200px;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #38bdf8, #ffffff, transparent);
+            animation: comet 4s infinite linear;
+        }
+
+        .logo-glow {
+            animation: shine 3s infinite ease-in-out;
+            filter: drop-shadow(0px 0px 15px rgba(56, 189, 248, 0.4));
+        }
+
+        /* Botones estilizados en plateado y azul cian */
+        .stButton>button {
+            background: linear-gradient(90deg, #1e293b, #0f172a);
+            color: #f8fafc;
+            border: 1px solid #38bdf8;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        .stButton>button:hover {
+            background: linear-gradient(90deg, #0284c7, #0369a1);
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.6);
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+        </style>
+    """, unsafe_allow_html=unsafe_allow_html)
+
+# --- MÓDULO DE AUTENTICACIÓN CON VISTA DE LOGIN DINÁMICA ---
 def inicializar_estado_sesion():
     if "autenticado" not in st.session_state:
         st.session_state.autenticado = False
@@ -41,22 +116,34 @@ def validar_credenciales(usuario, clave):
     return False
 
 def vista_login():
-    st.markdown("### 🔒 Iniciar Sesión")
-    with st.form("login_form"):
-        user_input = st.text_input("Usuario")
-        pass_input = st.text_input("Contraseña", type="password")
-        submit = st.form_submit_button("Ingresar", use_container_width=True)
-        
-        if submit:
-            if validar_credenciales(user_input, pass_input):
-                st.session_state.autenticado = True
-                st.session_state.usuario = user_input
-                st.success("Sesión iniciada correctamente")
-                st.rerun()
-            else:
-                st.error("⚠️ Usuario o contraseña incorrectos")
+    aplicar_estilos_custom()
+    
+    col_a, col_b, col_c = st.columns([1, 1.8, 1])
+    with col_b:
+        st.markdown('<div class="comet-effect"></div>', unsafe_allow_html=True)
+        if os.path.exists(RUTA_LOGO):
+            st.image(RUTA_LOGO, use_container_width=True)
+        else:
+            st.markdown("<h2 style='text-align: center; color: #38bdf8;'>AO RNLD US</h2>", unsafe_allow_html=True)
+            
+        st.markdown("<h4 style='text-align: center; color: #cbd5e1; font-weight: 300;'>INGENIERÍA • DISEÑO • CONSTRUCCIÓN</h4>", unsafe_allow_html=True)
+        st.write("")
 
-# --- FUNCIONES DE BASE DE DATOS DE SELLOS ---
+        with st.form("login_form"):
+            user_input = st.text_input("👤 Usuario", placeholder="Ingrese su usuario")
+            pass_input = st.text_input("🔑 Contraseña", type="password", placeholder="••••••••")
+            submit = st.form_submit_button("INGRESAR AL SISTEMA", use_container_width=True)
+            
+            if submit:
+                if validar_credenciales(user_input, pass_input):
+                    st.session_state.autenticado = True
+                    st.session_state.usuario = user_input
+                    st.success("Acceso Autorizado")
+                    st.rerun()
+                else:
+                    st.error("⚠️ Credenciales incorrectas")
+
+# --- FUNCIONES DE BASE DE DATOS DE SELLOS Y EXCEL ---
 def obtener_libreria_sellos():
     extensiones = ('*.png', '*.jpg', '*.jpeg', '*.PNG', '*.JPG')
     archivos = []
@@ -142,7 +229,7 @@ def convertir_excel_a_pdf(excel_bytes):
             os.remove(tmp_excel_path)
         if expected_pdf_path and os.path.exists(expected_pdf_path):
             os.remove(expected_pdf_path)
-        return None, f"Error en conversión: {str(e)}. Verifica que LibreOffice esté instalado."
+        return None, f"Error en conversión: {str(e)}."
 
 def unificar_pdfs(lista_pdf_bytes):
     pdf_final = fitz.open()
@@ -160,7 +247,7 @@ def unificar_pdfs(lista_pdf_bytes):
 
 def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, offset_correlativo, plantilla_path=PLANTILLA_EXCEL):
     if not os.path.exists(plantilla_path):
-        st.error(f"⚠️ No se encontró la plantilla `{plantilla_path}` en la carpeta del proyecto.")
+        st.error(f"⚠️ No se encontró la plantilla `{plantilla_path}`.")
         return None, None
 
     wb = openpyxl.load_workbook(plantilla_path)
@@ -216,8 +303,7 @@ def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, of
     output_stream.seek(0)
     return output_stream.getvalue(), secuencia_completa
 
-# --- FUNCIONES DE EXTRACCIÓN Y DETECCIÓN ---
-
+# --- EXTRACCIÓN Y BÚSQUEDA ---
 def limpiar_texto_comillas(texto):
     if not texto:
         return ""
@@ -351,7 +437,6 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
     candidatos = []
 
     if es_a4:
-        # --- ESTRATEGIA A4: BÚSQUEDA EN L INVERTIDA ---
         for y in range(alto_img - alto_sello - 30, 30, -paso):
             for x in range(30, ancho_img - ancho_sello - 30, paso):
                 if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
@@ -381,7 +466,6 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
         if not candidatos:
             return 30, alto_img - alto_sello - 30
     else:
-        # --- ESTRATEGIA A3: BÚSQUEDA ESTÁNDAR ---
         for x in range(ancho_img - ancho_sello - 30, 30, -paso):
             for y in range(alto_img - alto_sello - 30, 30, -paso):
                 if x > (ancho_img * 0.60) and y > (alto_img * 0.70):
@@ -418,10 +502,7 @@ def buscar_posicion_espacio_libre(imagen_gris, ancho_sello, alto_sello, sellos_y
 
 def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color_rgb, texto_fecha, rotacion):
     ruta_png = None
-    posibles_rutas = [
-        nombre_png,
-        os.path.join(CARPETA_SELLOS, nombre_png)
-    ]
+    posibles_rutas = [nombre_png, os.path.join(CARPETA_SELLOS, nombre_png)]
 
     for r in posibles_rutas:
         if os.path.exists(r):
@@ -429,15 +510,13 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
             break
 
     if not ruta_png:
-        return False, f"⚠️ No se encontró la imagen '{nombre_png}' en la carpeta raíz o en '{CARPETA_SELLOS}'."
+        return False, f"⚠️ No se encontró la imagen '{nombre_png}'."
 
     pagina.insert_image(rect_nativo, filename=ruta_png, rotate=rotacion)
 
     partes = re.split(r'[/.-]', texto_fecha.strip())
     if len(partes) >= 3:
-        dia_txt = partes[0].zfill(2)
-        mes_txt = partes[1].zfill(2)
-        anio_txt = partes[2][-2:].zfill(2)
+        dia_txt, mes_txt, anio_txt = partes[0].zfill(2), partes[1].zfill(2), partes[2][-2:].zfill(2)
     else:
         dia_txt, mes_txt, anio_txt = "", "", ""
 
@@ -445,12 +524,7 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
     fontsize = 0.50 * CM_TO_PT
 
     y_vista = view_rect.y0 + (view_rect.height * 0.81)
-
-    posiciones = [
-        (dia_txt, 0.38),
-        (mes_txt, 0.62),
-        (anio_txt, 0.89)
-    ]
+    posiciones = [(dia_txt, 0.38), (mes_txt, 0.62), (anio_txt, 0.89)]
 
     for txt, rel_x in posiciones:
         if not txt:
@@ -498,7 +572,6 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
         alto_img, ancho_img = imagen_gris.shape
         max_dim = max(ancho_img, alto_img)
         
-        # Evaluación si la hoja es A4
         es_hoja_a4 = max_dim < 1300
         if es_hoja_a4:
             contiene_a4 = True
@@ -523,15 +596,11 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
             if item_sello == "CC - Copia Controlada (Rojo)":
                 exito, msg_err = agregar_sello_png_dinamico(
-                    pagina, view_rect, rect_nativo, 
-                    "cc_sin_fondo.png", (0.0, 0.20, 0.65), 
-                    texto_fecha, rot
+                    pagina, view_rect, rect_nativo, "cc_sin_fondo.png", (0.0, 0.20, 0.65), texto_fecha, rot
                 )
             elif item_sello == "CI - Copia Informativa (Azul)":
                 exito, msg_err = agregar_sello_png_dinamico(
-                    pagina, view_rect, rect_nativo, 
-                    "ci_sin_fondo.png", (0.80, 0.0, 0.0), 
-                    texto_fecha, rot
+                    pagina, view_rect, rect_nativo, "ci_sin_fondo.png", (0.80, 0.0, 0.0), texto_fecha, rot
                 )
             else:
                 ruta_img = libreria_archivos.get(item_sello)
@@ -539,7 +608,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
                     pagina.insert_image(rect_nativo, filename=ruta_img, rotate=rot)
                 else:
                     exito = False
-                    msg_err = f"⚠️ No se encontró la imagen del sello '{item_sello}'."
+                    msg_err = f"⚠️ No se encontró la imagen '{item_sello}'."
 
             if exito:
                 sellos_puestos_hoja.append((x_px, y_px, ancho_sello_px, alto_sello_px))
@@ -559,18 +628,20 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
 
     return pdf_final_bytes, resumen_planos, alertas_sellos, contiene_a4
 
-# --- APLICACIÓN PRINCIPAL STREAMLIT ---
+# --- PRINCIPAL ---
 def main():
-    st.set_page_config(page_title="Estampador OSP & Guías de Remisión", page_icon="📐", layout="wide")
+    st.set_page_config(page_title="AO RNLD US - Estampador & GR", page_icon="📐", layout="wide")
     inicializar_estado_sesion()
 
     if not st.session_state.autenticado:
-        col_c, _ = st.columns([1, 2])
-        with col_c:
-            vista_login()
+        vista_login()
         return
 
-    # --- BARRA LATERAL (USUARIO Y CONFIGURACIÓN) ---
+    aplicar_estilos_custom()
+
+    # --- BARRA LATERAL ---
+    if os.path.exists(RUTA_LOGO):
+        st.sidebar.image(RUTA_LOGO, use_container_width=True)
     st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state.usuario}`")
     if st.sidebar.button("🔴 Cerrar Sesión"):
         st.session_state.autenticado = False
@@ -578,15 +649,8 @@ def main():
         st.rerun()
 
     st.sidebar.divider()
-    st.sidebar.header("⚙️ Ajustes de Búsqueda")
-    paso_evaluacion = st.sidebar.slider(
-        "🎯 Precisión de Escaneo (Paso en px):",
-        min_value=5,
-        max_value=30,
-        value=10,
-        step=5,
-        help="Ajusta la velocidad y precisión del cálculo de espacio libre."
-    )
+    st.sidebar.header("⚙️ Ajustes de Escaneo")
+    paso_evaluacion = st.sidebar.slider("🎯 Precisión (Paso en px):", 5, 30, 10, 5)
 
     st.sidebar.header("📁 Cargar Nuevas Firmas")
     with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
@@ -603,8 +667,8 @@ def main():
                 st.rerun()
 
     # --- INTERFAZ PRINCIPAL ---
-    st.title("📐 ESTAMPADOR Y GENERADOR DE GUÍAS DE REMISIÓN")
-    st.caption("Búsqueda adaptativa: L Invertida en A4 y Escaneo Estándar en A3")
+    st.title("📐 SISTEMA DE ESTAMPADO Y GUÍAS DE REMISIÓN")
+    st.caption("AO RNLD US • INGENIERÍA • DISEÑO • CONSTRUCCIÓN")
 
     col1, col2, col3 = st.columns([1.2, 1, 1])
 
@@ -638,8 +702,8 @@ def main():
     st.divider()
 
     if archivo_pdf and sellos_seleccionados:
-        if st.button("🚀 Estampar PDF y Procesar", use_container_width=True):
-            with st.spinner(f"Procesando plano con paso de {paso_evaluacion}px..."):
+        if st.button("🚀 Estampar PDF y Procesar Documentos", use_container_width=True):
+            with st.spinner("Procesando plano con algoritmos adaptativos..."):
                 pdf_res, resumen, alertas_sellos, es_a4 = procesar_pdf(
                     archivo_pdf.read(), 
                     sellos_seleccionados, 
@@ -658,7 +722,6 @@ def main():
                 lista_pdfs_guias = []
                 errores_pdf = []
 
-                # SE GENERAN GUÍAS SOLO SI ES A3 Y SI LA OPCIÓN ESTÁ ACTIVADA
                 if generar_guias_opcion and not es_a4:
                     for idx, area in enumerate(areas_seleccionadas):
                         excel_bytes, secuencia_inc = generar_excel_por_area(
@@ -702,21 +765,15 @@ def main():
         st.success("¡Planos estampados y procesados con éxito!")
 
         if st.session_state.get('es_a4'):
-            st.info("ℹ️ Se detectó formato A4: La búsqueda se realizó en 'L Invertida' y no se generaron Guías de Remisión.")
+            st.info("ℹ️ Se detectó formato A4: La búsqueda se ejecutó en 'L Invertida' y no se generaron Guías de Remisión.")
         elif not st.session_state.get('guias_activadas'):
-            st.info("ℹ️ La opción de Guías de Remisión estuvo desactivada durante este proceso.")
+            st.info("ℹ️ La opción de Guías estuvo desactivada.")
 
         if st.session_state.get('alertas_sellos'):
             for alert in st.session_state['alertas_sellos']:
                 st.warning(alert)
 
-        if st.session_state.get('errores_pdf'):
-            st.warning("⚠️ Observación al exportar los PDFs de los Excels:")
-            for err in st.session_state['errores_pdf']:
-                st.caption(f"- {err}")
-
         st.subheader("📥 Descargas Generales")
-
         col_dl1, col_dl2 = st.columns(2)
 
         with col_dl1:
@@ -731,7 +788,7 @@ def main():
         with col_dl2:
             if st.session_state.get('pdf_guias_unificado'):
                 st.download_button(
-                    "📑 Descargar PDF Consolidado de Guías (Todas las Áreas)", 
+                    "📑 Descargar PDF Consolidado de Guías", 
                     data=st.session_state['pdf_guias_unificado'], 
                     file_name=f"GUIAS_REMISION_CONSOLIDADAS_{datetime.datetime.now().strftime('%Y%m%d')}.pdf", 
                     mime="application/pdf", 
