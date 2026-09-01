@@ -5,11 +5,11 @@ import streamlit as st
 CARPETA_SELLOS = "firmas_sellos"
 
 def inicializar_estado_sesion():
-    """Inicializa las variables de estado en Streamlit."""
+    """Inicializa la sesión bloqueada por defecto."""
     if "autenticado" not in st.session_state:
-        st.session_state.autenticado = True  # Cambia a False si usas un login activo
+        st.session_state.autenticado = False  # Fuerza el login al iniciar
     if "usuario" not in st.session_state:
-        st.session_state.usuario = "Usuario"
+        st.session_state.usuario = None
 
 def obtener_libreria_sellos():
     """Escanea la carpeta de firmas/sellos y devuelve un diccionario con sus rutas."""
