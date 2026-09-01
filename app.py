@@ -29,76 +29,83 @@ if not os.path.exists(CARPETA_SELLOS):
     os.makedirs(CARPETA_SELLOS)
 
 # --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS Y EFECTOS CÓSMICOS ---
+# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS (TEMA CLARO PROFESIONAL) ---
 def aplicar_estilos_custom():
     st.markdown("""
         <style>
-        /* Estilos generales de la App */
+        /* Fondo general claro */
         .stApp {
-            background-color: #0d1117;
-            color: #e6edf3;
+            background-color: #f4f6f9;
+            color: #1e293b;
         }
 
-        /* Estilo personalizado para el Login */
-        .login-card {
-            background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 58, 138, 0.85));
-            border: 1px solid rgba(192, 192, 192, 0.3);
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 0 25px rgba(56, 189, 248, 0.2);
-            text-align: center;
-            position: relative;
-            overflow: hidden;
+        /* Barra Lateral (Sidebar) estilo limpio */
+        [data-testid="stSidebar"] {
+            background-color: #ffffff;
+            border-right: 1px solid #e2e8f0;
         }
 
-        /* Efectos de Partículas / Cometas en CSS */
-        @keyframes comet {
-            0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); opacity: 0; }
-            50% { opacity: 0.8; }
-            100% { transform: translateX(200%) translateY(200%) rotate(45deg); opacity: 0; }
+        /* Estilo para los títulos y etiquetas */
+        h1, h2, h3, h4, label, .stMarkdown p {
+            color: #0f172a !important;
+            font-weight: 600;
+        }
+        
+        /* Contenedor principal con bordes suaves */
+        .main .block-container {
+            padding-top: 2rem;
+            max-width: 95%;
         }
 
-        @keyframes shine {
-            0% { opacity: 0.3; transform: scale(0.98); }
-            50% { opacity: 1; transform: scale(1.02); }
-            100% { opacity: 0.3; transform: scale(0.98); }
+        /* Tarjetas e Inputs de entrada de datos */
+        .stTextInput input, .stDateInput input, [data-baseweb="select"] {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border: 1px solid #cbd5e1 !important;
+            border-radius: 8px !important;
+        }
+        
+        /* Uploader de archivos */
+        [data-testid="stFileUploader"] {
+            background-color: #ffffff;
+            border: 1px dashed #0284c7;
+            border-radius: 10px;
+            padding: 10px;
         }
 
-        .comet-effect {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none;
-            overflow: hidden;
-            z-index: 1;
-        }
-
-        .comet-effect::before {
-            content: '';
-            position: absolute;
-            width: 200px;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #38bdf8, #ffffff, transparent);
-            animation: comet 4s infinite linear;
-        }
-
-        .logo-glow {
-            animation: shine 3s infinite ease-in-out;
-            filter: drop-shadow(0px 0px 15px rgba(56, 189, 248, 0.4));
-        }
-
-        /* Botones estilizados en plateado y azul cian */
+        /* Botones Principales (Azul Corporativo / Cian) */
         .stButton>button {
-            background: linear-gradient(90deg, #1e293b, #0f172a);
-            color: #f8fafc;
-            border: 1px solid #38bdf8;
+            background: linear-gradient(90deg, #005596, #0077c8);
+            color: #ffffff !important;
+            border: none;
             border-radius: 8px;
             font-weight: bold;
+            padding: 0.6rem 1.2rem;
             transition: all 0.3s ease;
         }
+        
         .stButton>button:hover {
-            background: linear-gradient(90deg, #0284c7, #0369a1);
-            box-shadow: 0 0 15px rgba(56, 189, 248, 0.6);
-            border-color: #ffffff;
-            color: #ffffff;
+            background: linear-gradient(90deg, #003d6d, #005596);
+            box-shadow: 0 4px 12px rgba(0, 119, 200, 0.3);
+            color: #ffffff !important;
+        }
+
+        /* Estilo para las Tablas de datos */
+        [data-testid="stDataFrame"] {
+            background-color: #ffffff;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+
+        /* Estilo personalizado para la pantalla de Login */
+        .login-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+            text-align: center;
         }
         </style>
     """, unsafe_allow_html=True)
