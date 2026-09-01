@@ -29,6 +29,7 @@ if not os.path.exists(CARPETA_SELLOS):
     os.makedirs(CARPETA_SELLOS)
 
 # --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS (TEMA OSCURO CORPORATIVO) ---
+# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS (TEMA OSCURO CORPORATIVO) ---
 def aplicar_estilos_custom():
     st.markdown("""
         <style>
@@ -72,14 +73,24 @@ def aplicar_estilos_custom():
             border-radius: 6px !important;
         }
 
-        /* MultiSelect tags (Etiquetas seleccionadas) */
+        /* FIX: MultiSelect tags (Etiquetas seleccionadas en Azul Corporativo) */
+        span[data-baseweb="tag"], 
+        div[data-baseweb="tag"],
         [data-baseweb="tag"] {
             background-color: #005596 !important;
+            border-color: #0077C8 !important;
             border-radius: 4px !important;
         }
         
+        span[data-baseweb="tag"] *, 
         [data-baseweb="tag"] span {
             color: #FFFFFF !important;
+        }
+
+        /* Checkbox color acento azul */
+        input[type="checkbox"]:checked {
+            background-color: #005596 !important;
+            border-color: #005596 !important;
         }
 
         /* Uploader de archivos */
@@ -144,7 +155,7 @@ def aplicar_estilos_custom():
         }
         </style>
     """, unsafe_allow_html=True)
-
+    
 # --- MÓDULO DE AUTENTICACIÓN ---
 def inicializar_estado_sesion():
     if "autenticado" not in st.session_state:
