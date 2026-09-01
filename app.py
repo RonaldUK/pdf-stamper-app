@@ -28,89 +28,124 @@ RUTA_LOGO = "logo.png"
 if not os.path.exists(CARPETA_SELLOS):
     os.makedirs(CARPETA_SELLOS)
 
-# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS Y EFECTOS CÓSMICOS ---
-# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS (TEMA CLARO PROFESIONAL) ---
+# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS (TEMA OSCURO CORPORATIVO) ---
 def aplicar_estilos_custom():
     st.markdown("""
         <style>
-        /* Fondo general claro */
+        /* Fondo general y color de texto base */
         .stApp {
-            background-color: #f4f6f9;
-            color: #1e293b;
+            background-color: #0B132B;
+            color: #F8FAFC;
         }
 
-        /* Barra Lateral (Sidebar) estilo limpio */
+        /* Barra Lateral (Sidebar) */
         [data-testid="stSidebar"] {
-            background-color: #ffffff;
-            border-right: 1px solid #e2e8f0;
+            background-color: #1C2541;
+            border-right: 1px solid #1E293B;
+        }
+        
+        [data-testid="stSidebar"] * {
+            color: #F8FAFC !important;
         }
 
         /* Estilo para los títulos y etiquetas */
         h1, h2, h3, h4, label, .stMarkdown p {
-            color: #0f172a !important;
+            color: #F8FAFC !important;
             font-weight: 600;
         }
         
-        /* Contenedor principal con bordes suaves */
+        .stCaption {
+            color: #94A3B8 !important;
+        }
+
+        /* Contenedor principal */
         .main .block-container {
             padding-top: 2rem;
             max-width: 95%;
         }
 
-        /* Tarjetas e Inputs de entrada de datos */
-        .stTextInput input, .stDateInput input, [data-baseweb="select"] {
-            background-color: #ffffff !important;
-            color: #0f172a !important;
-            border: 1px solid #cbd5e1 !important;
-            border-radius: 8px !important;
+        /* Entradas de texto, fechas y selectores */
+        .stTextInput input, .stDateInput input, [data-baseweb="select"], [data-baseweb="base-input"] {
+            background-color: #1C2541 !important;
+            color: #F8FAFC !important;
+            border: 1px solid #3B82F6 !important;
+            border-radius: 6px !important;
+        }
+
+        /* MultiSelect tags (Etiquetas seleccionadas) */
+        [data-baseweb="tag"] {
+            background-color: #005596 !important;
+            border-radius: 4px !important;
         }
         
+        [data-baseweb="tag"] span {
+            color: #FFFFFF !important;
+        }
+
         /* Uploader de archivos */
         [data-testid="stFileUploader"] {
-            background-color: #ffffff;
-            border: 1px dashed #0284c7;
-            border-radius: 10px;
+            background-color: #1C2541;
+            border: 1px dashed #38BDF8;
+            border-radius: 8px;
             padding: 10px;
         }
 
-        /* Botones Principales (Azul Corporativo / Cian) */
+        /* Botones Principales (Azul Corporativo) */
         .stButton>button {
-            background: linear-gradient(90deg, #005596, #0077c8);
-            color: #ffffff !important;
+            background: linear-gradient(90deg, #005596, #0077C8);
+            color: #FFFFFF !important;
             border: none;
-            border-radius: 8px;
+            border-radius: 6px;
             font-weight: bold;
             padding: 0.6rem 1.2rem;
             transition: all 0.3s ease;
         }
         
         .stButton>button:hover {
-            background: linear-gradient(90deg, #003d6d, #005596);
-            box-shadow: 0 4px 12px rgba(0, 119, 200, 0.3);
-            color: #ffffff !important;
+            background: linear-gradient(90deg, #003D6D, #005596);
+            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
+            color: #FFFFFF !important;
+        }
+
+        /* Botones de Descarga */
+        .stDownloadButton>button {
+            background-color: #0F172A;
+            color: #38BDF8 !important;
+            border: 1px solid #38BDF8;
+            border-radius: 6px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .stDownloadButton>button:hover {
+            background-color: #005596;
+            color: #FFFFFF !important;
+            border: 1px solid #005596;
         }
 
         /* Estilo para las Tablas de datos */
         [data-testid="stDataFrame"] {
-            background-color: #ffffff;
+            background-color: #1C2541;
             border-radius: 8px;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            border: 1px solid #334155;
         }
 
-        /* Estilo personalizado para la pantalla de Login */
-        .login-card {
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
-            text-align: center;
+        /* Formulario de Login */
+        [data-testid="stForm"] {
+            background-color: #1C2541;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        /* Divisores horizontales */
+        hr {
+            border-color: #334155 !important;
         }
         </style>
     """, unsafe_allow_html=True)
 
-# --- MÓDULO DE AUTENTICACIÓN CON VISTA DE LOGIN DINÁMICA ---
+# --- MÓDULO DE AUTENTICACIÓN ---
 def inicializar_estado_sesion():
     if "autenticado" not in st.session_state:
         st.session_state.autenticado = False
@@ -127,18 +162,17 @@ def vista_login():
     
     col_a, col_b, col_c = st.columns([1, 1.8, 1])
     with col_b:
-        st.markdown('<div class="comet-effect"></div>', unsafe_allow_html=True)
         if os.path.exists(RUTA_LOGO):
             st.image(RUTA_LOGO, use_container_width=True)
         else:
-            st.markdown("<h2 style='text-align: center; color: #38bdf8;'>AO RNLD US</h2>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center; color: #38BDF8;'>AO RNLD US</h2>", unsafe_allow_html=True)
             
-        st.markdown("<h4 style='text-align: center; color: #cbd5e1; font-weight: 300;'>INGENIERÍA • DISEÑO • CONSTRUCCIÓN</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='text-align: center; color: #94A3B8; font-weight: 300;'>INGENIERÍA • DISEÑO • CONSTRUCCIÓN</h4>", unsafe_allow_html=True)
         st.write("")
 
         with st.form("login_form"):
-            user_input = st.text_input("👤 Usuario", placeholder="Ingrese su usuario")
-            pass_input = st.text_input("🔑 Contraseña", type="password", placeholder="••••••••")
+            user_input = st.text_input("Usuario", placeholder="Ingrese su usuario")
+            pass_input = st.text_input("Contraseña", type="password", placeholder="••••••••")
             submit = st.form_submit_button("INGRESAR AL SISTEMA", use_container_width=True)
             
             if submit:
@@ -148,7 +182,7 @@ def vista_login():
                     st.success("Acceso Autorizado")
                     st.rerun()
                 else:
-                    st.error("⚠️ Credenciales incorrectas")
+                    st.error("Credenciales incorrectas")
 
 # --- FUNCIONES DE BASE DE DATOS DE SELLOS Y EXCEL ---
 def obtener_libreria_sellos():
@@ -254,7 +288,7 @@ def unificar_pdfs(lista_pdf_bytes):
 
 def generar_excel_por_area(resumen_planos, fecha_texto, secuencia_base, area, offset_correlativo, plantilla_path=PLANTILLA_EXCEL):
     if not os.path.exists(plantilla_path):
-        st.error(f"⚠️ No se encontró la plantilla `{plantilla_path}`.")
+        st.error(f"No se encontró la plantilla `{plantilla_path}`.")
         return None, None
 
     wb = openpyxl.load_workbook(plantilla_path)
@@ -517,7 +551,7 @@ def agregar_sello_png_dinamico(pagina, view_rect, rect_nativo, nombre_png, color
             break
 
     if not ruta_png:
-        return False, f"⚠️ No se encontró la imagen '{nombre_png}'."
+        return False, f"No se encontró la imagen '{nombre_png}'."
 
     pagina.insert_image(rect_nativo, filename=ruta_png, rotate=rotacion)
 
@@ -615,7 +649,7 @@ def procesar_pdf(pdf_bytes, lista_sellos_elegidos, libreria_archivos, texto_fech
                     pagina.insert_image(rect_nativo, filename=ruta_img, rotate=rot)
                 else:
                     exito = False
-                    msg_err = f"⚠️ No se encontró la imagen '{item_sello}'."
+                    msg_err = f"No se encontró la imagen '{item_sello}'."
 
             if exito:
                 sellos_puestos_hoja.append((x_px, y_px, ancho_sello_px, alto_sello_px))
@@ -649,22 +683,22 @@ def main():
     # --- BARRA LATERAL ---
     if os.path.exists(RUTA_LOGO):
         st.sidebar.image(RUTA_LOGO, use_container_width=True)
-    st.sidebar.markdown(f"👤 **Usuario:** `{st.session_state.usuario}`")
-    if st.sidebar.button("🔴 Cerrar Sesión"):
+    st.sidebar.markdown(f"**Usuario:** `{st.session_state.usuario}`")
+    if st.sidebar.button("Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
         st.session_state.usuario = None
         st.rerun()
 
     st.sidebar.divider()
-    st.sidebar.header("⚙️ Ajustes de Escaneo")
-    paso_evaluacion = st.sidebar.slider("🎯 Precisión (Paso en px):", 5, 30, 10, 5)
+    st.sidebar.header("Ajustes de Escaneo")
+    paso_evaluacion = st.sidebar.slider("Precisión (Paso en px):", 5, 30, 10, 5)
 
-    st.sidebar.header("📁 Cargar Nuevas Firmas")
-    with st.sidebar.expander("➕ Subir Imagen a Base de Datos", expanded=False):
+    st.sidebar.header("Cargar Nuevas Firmas")
+    with st.sidebar.expander("Subir Imagen a Base de Datos", expanded=False):
         nuevo_nombre = st.sidebar.text_input("Nombre de la firma/sello:")
         archivo_nuevo = st.sidebar.file_uploader("Subir imagen (PNG/JPG):", type=["png", "jpg", "jpeg"])
 
-        if st.sidebar.button("💾 Guardar Sello"):
+        if st.sidebar.button("Guardar Sello", use_container_width=True):
             if nuevo_nombre.strip() and archivo_nuevo:
                 ext = archivo_nuevo.name.split(".")[-1]
                 ruta_dest = os.path.join(CARPETA_SELLOS, f"{nuevo_nombre.lower().strip().replace(' ', '_')}.{ext}")
@@ -674,7 +708,7 @@ def main():
                 st.rerun()
 
     # --- INTERFAZ PRINCIPAL ---
-    st.title("📐 SISTEMA DE ESTAMPADO Y GUÍAS DE REMISIÓN")
+    st.title("SISTEMA DE ESTAMPADO Y GUÍAS DE REMISIÓN")
     st.caption("AO RNLD US • INGENIERÍA • DISEÑO • CONSTRUCCIÓN")
 
     col1, col2, col3 = st.columns([1.2, 1, 1])
@@ -684,7 +718,7 @@ def main():
         secuencia_gr = st.text_input("2. Secuencia Base (ej: 8418-OSP-SG-2026):", value="8418-OSP-SG-2026")
 
     with col2:
-        generar_guias_opcion = st.checkbox("📋 Generar Guías de Remisión (Solo A3)", value=True)
+        generar_guias_opcion = st.checkbox("Generar Guías de Remisión (Solo A3)", value=True)
         fecha_obj = st.date_input("3. Fecha de Sellado (J5):", value=datetime.date.today(), format="DD/MM/YYYY")
         texto_fecha = fecha_obj.strftime("%d/%m/%Y")
 
@@ -709,7 +743,7 @@ def main():
     st.divider()
 
     if archivo_pdf and sellos_seleccionados:
-        if st.button("🚀 Estampar PDF y Procesar Documentos", use_container_width=True):
+        if st.button("Estampar PDF y Procesar Documentos", use_container_width=True):
             with st.spinner("Procesando plano con algoritmos adaptativos..."):
                 pdf_res, resumen, alertas_sellos, es_a4 = procesar_pdf(
                     archivo_pdf.read(), 
@@ -772,20 +806,20 @@ def main():
         st.success("¡Planos estampados y procesados con éxito!")
 
         if st.session_state.get('es_a4'):
-            st.info("ℹ️ Se detectó formato A4: La búsqueda se ejecutó en 'L Invertida' y no se generaron Guías de Remisión.")
+            st.info("Se detectó formato A4: La búsqueda se ejecutó en 'L Invertida' y no se generaron Guías de Remisión.")
         elif not st.session_state.get('guias_activadas'):
-            st.info("ℹ️ La opción de Guías estuvo desactivada.")
+            st.info("La opción de Guías estuvo desactivada.")
 
         if st.session_state.get('alertas_sellos'):
             for alert in st.session_state['alertas_sellos']:
                 st.warning(alert)
 
-        st.subheader("📥 Descargas Generales")
+        st.subheader("Descargas Generales")
         col_dl1, col_dl2 = st.columns(2)
 
         with col_dl1:
             st.download_button(
-                "📄 Descargar PDF Planos Sellados", 
+                "Descargar PDF Planos Sellados", 
                 data=st.session_state['pdf_res'], 
                 file_name=st.session_state['pdf_nombre'], 
                 mime="application/pdf", 
@@ -795,7 +829,7 @@ def main():
         with col_dl2:
             if st.session_state.get('pdf_guias_unificado'):
                 st.download_button(
-                    "📑 Descargar PDF Consolidado de Guías", 
+                    "Descargar PDF Consolidado de Guías", 
                     data=st.session_state['pdf_guias_unificado'], 
                     file_name=f"GUIAS_REMISION_CONSOLIDADAS_{datetime.datetime.now().strftime('%Y%m%d')}.pdf", 
                     mime="application/pdf", 
@@ -804,13 +838,13 @@ def main():
 
         if st.session_state.get('excels_generados'):
             st.divider()
-            st.markdown("#### 📊 Archivos Excel y PDF de Guías por Área:")
+            st.markdown("#### Archivos Excel y PDF de Guías por Área:")
             cols_excels = st.columns(len(st.session_state['excels_generados']))
 
             for idx, (area, data_excel) in enumerate(st.session_state['excels_generados'].items()):
                 with cols_excels[idx]:
                     st.download_button(
-                        label=f"🟢 Excel: {data_excel['secuencia']} ({area})",
+                        label=f"Excel: {data_excel['secuencia']} ({area})",
                         data=data_excel["bytes"],
                         file_name=data_excel["nombre"],
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -819,7 +853,7 @@ def main():
                     )
                     if data_excel.get("pdf_bytes"):
                         st.download_button(
-                            label=f"🔴 PDF: {data_excel['secuencia']} ({area})",
+                            label=f"PDF: {data_excel['secuencia']} ({area})",
                             data=data_excel["pdf_bytes"],
                             file_name=f"{data_excel['secuencia']}_{area}.pdf",
                             mime="application/pdf",
@@ -828,7 +862,7 @@ def main():
                         )
 
         st.divider()
-        st.subheader("📋 Resumen de Planos Detectados")
+        st.subheader("Resumen de Planos Detectados")
         st.dataframe(st.session_state['resumen'], use_container_width=True)
 
 if __name__ == "__main__":
