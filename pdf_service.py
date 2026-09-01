@@ -3,9 +3,7 @@ import re
 import io
 import glob
 import fitz  # PyMuPDF
-from pypdf import PdfWriter, PdfReader
 
-# Constantes de conversión y rutas
 CM_TO_PT = 28.34645669
 ANCHO_SELLO_CM = 7.1
 ALTO_SELLO_CM = 2.6
@@ -26,29 +24,23 @@ def obtener_libreria_sellos():
     return libreria
 
 def unificar_pdfs(lista_pdf_bytes):
-    """Junta múltiples archivos PDF en un solo stream de bytes."""
-    writer = PdfWriter()
+    """Junta múltiples archivos PDF usando PyMuPDF."""
+    doc_unificado = fitz.open()
     for pdf_bytes in lista_pdf_bytes:
         if pdf_bytes:
-            reader = PdfReader(io.BytesIO(pdf_bytes))
-            for page in reader.pages:
-                writer.add_page(page)
+            temp_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            doc_unificado.insert_pdf(temp_doc)
+            temp_doc.close()
     
-    output_stream = io.BytesIO()
-    writer.write(output_stream)
-    output_stream.seek(0)
-    return output_stream.getvalue()
+    output_buffer = io.BytesIO()
+    doc_unificado.save(output_buffer)
+    doc_unificado.close()
+    output_buffer.seek(0)
+    return output_buffer.getvalue()
 
 def convertir_excel_a_pdf(excel_bytes):
-    """
-    Intenta convertir Excel a PDF. En entornos Cloud como Streamlit Cloud 
-    donde no hay MS Excel ni LibreOffice, retorna None de forma segura sin romper la app.
-    """
-    try:
-        # Reservado para entornos de escritorio Windows con MS Excel o servidores con LibreOffice
-        return None, "La conversión automática de Excel a PDF requiere entorno local con Excel/LibreOffice."
-    except Exception as e:
-        return None, str(e)
+    """Retorna None seguro en la nube."""
+    return None, "La conversión automática de Excel a PDF requiere entorno local con Excel/LibreOffice."
 
 def procesar_pdf(pdf_bytes, sellos_seleccionados, libreria_archivos, fecha_texto, paso=10):
     """Procesa el PDF agregando las estampas/sellos y generando la lista de resumen."""
@@ -61,13 +53,10 @@ def procesar_pdf(pdf_bytes, sellos_seleccionados, libreria_archivos, fecha_texto
         pagina = doc[num_pagina]
         rect = pagina.rect
 
-        # Determina si el formato es aproximadamente A4 (en puntos)
         if (rect.width < 650 and rect.height < 900) or (rect.height < 650 and rect.width < 900):
             es_a4 = True
 
         texto_pagina = pagina.get_text("text")
-        
-        # Búsqueda de código de plano y descripción en el texto
         lineas = [l.strip() for l in texto_pagina.split('\n') if l.strip()]
         codigo_plano = "No detectado"
         descripcion_plano = "Sin descripción"
@@ -86,7 +75,6 @@ def procesar_pdf(pdf_bytes, sellos_seleccionados, libreria_archivos, fecha_texto
             "Título / Descripción": descripcion_plano
         })
 
-        # Estampado de sellos en la esquina inferior derecha
         ancho_sello_pt = ANCHO_SELLO_CM * CM_TO_PT
         alto_sello_pt = ALTO_SELLO_CM * CM_TO_PT
 
